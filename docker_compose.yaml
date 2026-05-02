@@ -11,4 +11,5 @@ services:
       - ./custom_components/dominionsc:/config/custom_components/dominionsc
     ports:
       - 8123:8123
+    network_mode: "host"
     restart: unless-stopped
