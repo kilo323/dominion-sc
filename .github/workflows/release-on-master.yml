@@ -1,0 +1,144 @@
+name: Release on master
+
+# Trigger this workflow only after the CI workflow completes. This ensures the
+# release job runs only when CI has finished successfully for the same branch.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Only run when the triggering CI workflow completed successfully and the
+    # run was for the master branch. This prevents releases when CI fails.
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'master' &&
+      contains(github.event.workflow_run.head_commit.message, '[skip ci]') == false }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release version (date.increment) and build release body
+        id: gen_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          # ensure tags are fetched so we can inspect existing tags for today's date
+          git fetch --prune --tags origin
+
+          DATE=$(date -u +%Y.%m.%d)
+
+          # gather tags for today in the dotted format YYYY.MM.DD.NN (we no longer support legacy 'v' or '-' formats)
+          mapfile -t TAGS < <(git tag -l | grep -E "^${DATE}\." || true)
+
+          max=0
+          for t in "${TAGS[@]:-}"; do
+            # rest after DATE. (tags are expected to be like DATE.NN or DATE.NN.anything)
+            rest=${t#${DATE}.}
+            maybe=${rest%%.*}
+            if [[ "$maybe" =~ ^[0-9]+$ ]]; then
+              # force base-10 interpretation to avoid octal issues with leading zeros
+              num=$((10#$maybe))
+              if (( num > max )); then
+                max=$num
+              fi
+            fi
+          done
+
+          next=$((max + 1))
+          PADDED=$(printf "%02d" "$next")
+          # Use dotted format (no leading 'v') compatible with Home Assistant manifests: YYYY.MM.DD.NN
+          VERSION="${DATE}.${PADDED}"
+          echo "Computed version: $VERSION"
+
+          # Get the latest tag to determine what commits to include in changelog
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LATEST_TAG" ]; then
+            # Show commits since last tag
+            COMMITS=$(git --no-pager log --pretty=format:'- %h %s (%an)' "$LATEST_TAG"..HEAD)
+          else
+            # If no tags exist, show recent commits
+            COMMITS=$(git --no-pager log -n 20 --pretty=format:'- %h %s (%an)' HEAD)
+          fi
+
+          # Look for merged PR numbers in recent commit messages
+          PRS=$(git --no-pager log -n 50 --pretty=%B | grep -oE 'Merge pull request #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
+
+          REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
+
+          # Write multiline outputs to GITHUB_OUTPUT using a heredoc so newlines are preserved
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "release_body<<EOF" >> $GITHUB_OUTPUT
+          cat <<EOF >> $GITHUB_OUTPUT
+          Automated release for commit ${GITHUB_SHA}
+
+          Version: ${VERSION}
+          Commit: ${REPO_URL}/commit/${GITHUB_SHA}
+
+          Changelog (since last release):
+          ${COMMITS}
+
+          EOF
+          if [[ -n "${PRS// /}" ]]; then
+            echo "Associated PRs:" >> $GITHUB_OUTPUT
+            for pr in ${PRS}; do
+              echo "- ${REPO_URL}/pull/${pr}" >> $GITHUB_OUTPUT
+            done
+            echo "" >> $GITHUB_OUTPUT
+          fi
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Update manifest.json
+        env:
+          MANIFEST_PATH: custom_components/dominionsc/manifest.json
+          VERSION: ${{ steps.gen_version.outputs.version }}
+        run: |
+          python - <<'PY'
+          import json,os
+          p=os.environ['MANIFEST_PATH']
+          with open(p,'r', encoding='utf-8') as f:
+            data=json.load(f)
+          old=data.get('version')
+          new=os.environ['VERSION']
+          if old==new:
+            print('manifest already up-to-date:', new)
+            # exit without error; nothing to commit
+            raise SystemExit(0)
+          data['version']=new
+          with open(p,'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+          print('Updated manifest version from', old, 'to', new)
+          PY
+
+      - name: Commit manifest (if changed) and push
+        env:
+          MANIFEST_PATH: custom_components/dominionsc/manifest.json
+          VERSION: ${{ steps.gen_version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$MANIFEST_PATH"
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Bump version to $VERSION [skip ci]"
+            git push origin HEAD:master
+          fi
+
+      - name: Create GitHub release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.gen_version.outputs.version }}
+          release_name: ${{ steps.gen_version.outputs.version }}
+          body: ${{ steps.gen_version.outputs.release_body }}
+          draft: false
+          prerelease: false

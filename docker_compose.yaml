@@ -1,0 +1,14 @@
+services:
+  homeassistant:
+    image: lscr.io/linuxserver/homeassistant:latest
+    container_name: homeassistant
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+    volumes:
+      - ./ha_config:/config
+      - ./custom_components/dominionsc:/config/custom_components/dominionsc
+    ports:
+      - 8123:8123
+    restart: unless-stopped

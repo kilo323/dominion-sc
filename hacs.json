@@ -1,0 +1,12 @@
+{
+  "name": "Dominion SC Energy",
+  "content_in_root": false,
+  "filename": "custom_components/dominionsc",
+  "domains": ["sensor", "button"],
+  "homeassistant": "2026.4.0",
+  "iot_class": "cloud_polling",
+  "zip_release": false,
+  "country": "US",
+  "render_readme": true,
+  "description": "Home Assistant integration providing Dominion Energy South Carolina consumption and cost sensors, backfill tools, and diagnostics for Energy Dashboard compatibility."
+}

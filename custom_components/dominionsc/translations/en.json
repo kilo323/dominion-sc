@@ -1,0 +1,68 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect Dominion SC account",
+        "description": "Enter your Dominion Energy South Carolina credentials.",
+        "data": {
+          "username": "Username",
+          "password": "Password",
+          "verify_ssl": "Verify SSL certificates"
+        }
+      },
+      "2fa_method": {
+        "title": "Two-factor authentication",
+        "description": "Choose where to send your verification code.",
+        "data": {
+          "option_index": "2FA method"
+        }
+      },
+      "2fa_code": {
+        "title": "Enter verification code",
+        "data": {
+          "code": "Verification code",
+          "remember_device": "Remember device"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Dominion SC Energy",
+        "description": "Update your credentials and re-authenticate. If your username and password are unchanged, 2FA may be skipped."
+      }
+    },
+    "error": {
+      "auth_failed": "Authentication failed",
+      "twofa_send_failed": "Could not send verification code",
+      "twofa_verify_failed": "Verification code was not accepted",
+      "twofa_post_auth_failed": "Verification succeeded, but account setup failed. Check Home Assistant logs for details and retry."
+    },
+    "abort": {
+      "already_configured": "This account is already configured.",
+      "reconfigure_successful": "Reconfiguration successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Dominion SC options",
+        "description": "Adjust integration polling and backfill behavior.",
+        "data": {
+          "poll_minutes": "Polling interval",
+          "backfill_cycles_target": "Backfill cycle target",
+          "daily_lookback_days": "Daily reconcile lookback days"
+        },
+        "data_description": {
+          "poll_minutes": "How often to poll Dominion for new data (in minutes).",
+          "backfill_cycles_target": "Number of most recent completed billing cycles to backfill. Increasing this adds unfilled cycles to the backfill queue.",
+          "daily_lookback_days": "Number of days to look back during daily reconciliation to catch late-arriving data."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "dominion_sc_energy_backfill_cycles_remaining": {
+        "name": "Backfill Cycles Remaining"
+      }
+    }
+  }
+}

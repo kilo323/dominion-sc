@@ -1,0 +1,2 @@
+# Example sensor.yaml for Dominion SC Energy
+- platform: dominionsc

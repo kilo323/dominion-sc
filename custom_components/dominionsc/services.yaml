@@ -1,0 +1,36 @@
+run_backfill:
+  name: Run backfill
+  description: Process one billing cycle backfill for Dominion SC totals.
+  fields:
+    config_entry_id:
+      name: Config entry ID
+      description: Optional specific Dominion SC config entry ID.
+      required: false
+      selector:
+        text:
+    overwrite:
+      name: Overwrite existing cycle
+      description: Re-import selected cycle data and replace prior stored values.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+    allow_initialize_missing:
+      name: Allow initialize missing cycles
+      description: When true, the service may initialize the missing_cycles list when empty (used by automated runs). For manual calls, leave false to avoid implicit initialization.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+rewrite_statistics:
+  name: Rewrite statistics
+  description: Clear legacy dominionsc external statistics so Energy Dashboard uses recorder sensor statistics only.
+  fields:
+    config_entry_id:
+      name: Config entry ID
+      description: Optional specific Dominion SC config entry ID.
+      required: false
+      selector:
+        text:

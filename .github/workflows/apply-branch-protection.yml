@@ -1,0 +1,84 @@
+name: Apply Branch Protection (admin)
+
+# Manual workflow to apply branch protection rules to a branch using the
+# GitHub REST API. An admin should run this once to enforce protection for
+# the `master` branch. Inputs let you customize the required status checks
+# contexts and review count.
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to protect'
+        required: true
+        default: 'master'
+      contexts:
+        description: 'Comma-separated list of status check names to require (exact names as shown on PR Checks tab)'
+        required: true
+        default: 'CI'
+      enforce_admins:
+        description: 'Enforce for admins? true/false'
+        required: false
+        default: 'true'
+      required_approving_review_count:
+        description: 'Number of required approving reviews'
+        required: false
+        default: '1'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-protection:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply branch protection via GitHub API
+        uses: actions/github-script@v6
+        # Authenticate with an admin Personal Access Token (PAT) stored in
+        # the repository secret ADMIN_TOKEN. The automatically-provided
+        # GITHUB_TOKEN often lacks permission to modify branch protection.
+        with:
+          github-token: ${{ secrets.ADMIN_TOKEN }}
+          script: |
+            const branch = core.getInput('branch') || 'master'
+            const contextsRaw = core.getInput('contexts') || 'CI'
+            const enforceAdmins = (core.getInput('enforce_admins') || 'true').toLowerCase() === 'true'
+            const requiredApprovingReviewCount = parseInt(core.getInput('required_approving_review_count') || '1', 10)
+
+            const contexts = contextsRaw.split(',').map(s => s.trim()).filter(Boolean)
+
+            core.info(`Applying protection to branch: ${branch}`)
+            core.info(`Required status check contexts: ${JSON.stringify(contexts)}`)
+            core.info(`Enforce admins: ${enforceAdmins}`)
+            core.info(`Required approving review count: ${requiredApprovingReviewCount}`)
+
+            const owner = context.repo.owner
+            const repo = context.repo.repo
+
+            // Prepare request body matching the Branch Protection API
+            const body = {
+              required_status_checks: {
+                strict: true,
+                contexts: contexts
+              },
+              enforce_admins: enforceAdmins,
+              required_pull_request_reviews: {
+                dismiss_stale_reviews: true,
+                require_code_owner_reviews: false,
+                required_approving_review_count: requiredApprovingReviewCount
+              },
+              restrictions: null
+            }
+
+            // Call the API
+            await github.rest.repos.updateBranchProtection({
+              owner,
+              repo,
+              branch,
+              ...body
+            })
+
+            core.info('Branch protection applied successfully')
+        env:
+          # Keep GITHUB_TOKEN in env for any other calls if needed
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
