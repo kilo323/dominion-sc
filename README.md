@@ -33,6 +33,15 @@ For existing Home Assistant entries, change these values via **Settings → Devi
 - A [Dominion Energy South Carolina](https://www.dominionenergy.com/south-carolina) online account
 - HACS (for easy installation) or manual installation
 
+## Home Assistant Compatibility
+
+This integration is designed for Home Assistant **2026.4.0** and later versions. It uses modern Home Assistant patterns and APIs including:
+- DataUpdateCoordinator for polling
+- ConfigEntry and options flow for configuration
+- Store for persistent state management
+- SensorEntityDescription for sensor metadata
+- Long-term statistics integration with recorder
+
 ## Installation
 
 ### HACS (Recommended)

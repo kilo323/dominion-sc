@@ -144,6 +144,7 @@ Energy Dashboard-facing usage sensors use `total_increasing` (consumption) or `t
 - Monetary sensors must use `state_class=TOTAL` (not `TOTAL_INCREASING`).
 - Consumption sensors use `state_class=TOTAL_INCREASING`.
 - Keep entity metadata correct for long-term statistics and Energy Dashboard compatibility.
+- All auth state uses HA-native persistence (`ConfigEntry` + `Store`); no cookie files on disk.
 
 ## Sensor Requirements
 ### Energy Sensors (required for Energy Dashboard)
@@ -196,6 +197,13 @@ Parsing & state rules for contributors
 - Use `reference/` scripts and JSON dumps to understand API payloads.
 - Do not copy reference scripts directly into integration runtime code.
 - Prefer `get_daily_usage` for cycle backfill and `get_hourly_usage` for incremental updates.
+
+## Home Assistant Version Compatibility
+This integration is designed for and tested with Home Assistant **2026.4.0**. It leverages newer APIs and patterns that may not be available in older versions, including:
+- DataUpdateCoordinator features
+- Modern ConfigEntry options flow
+- Enhanced recorder statistics handling
+- Updated sensor entity metadata requirements
 
 ## Script Development Guidance
 - Place non-HA simulation/test helpers in `scripts/`.
