@@ -160,8 +160,7 @@ Energy Dashboard-facing usage sensors use `total_increasing` (consumption) or `t
 These sensors expose account and billing metadata useful for dashboards and automations. They are diagnostic/monetary sensors backed by the coordinator's persisted state and read from Dominion/Bidgely payloads.
 
 7. Bill Status (string) — source: `account_summary.raw_data.account.accountStatus` or `account_summary.account_balance` textual fallback.
-8. Bill Due Date (date) — source: `account_summary.due_date` or `account_summary.raw_data.account.dueDate`. Parse common formats like `Mar 9, 2026` and ISO `YYYY-MM-DD`.
-9. Last Payment (monetary, $) — source: `account_summary.last_payment_amount` (strings like `$333.19` parsed to numeric 333.19).
+8. Last Payment (monetary, $) — source: `account_summary.last_payment_amount` (strings like `$333.19` parsed to numeric 333.19).
 10. Account Balance (monetary, $) — source: `account_summary.account_balance`. Treat textual `Bill Paid` (case-insensitive) as numeric `0.0`.
 11. Current Cost (monetary, $) — source: `bill_projection.currentPrice`.
 12. Projected Price (monetary, $) — source: `bill_projection.projectionPrice`.

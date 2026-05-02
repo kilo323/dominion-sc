@@ -114,7 +114,6 @@ async def async_setup_entry(
     # informational account/billing sensors
     entities.extend(
         [
-            DominionSCBillDueDateSensor(coordinator, entry),
             DominionSCLastPaymentSensor(coordinator, entry),
             DominionSCAccountBalanceSensor(coordinator, entry),
             DominionSCCurrentCostSensor(coordinator, entry),
@@ -424,37 +423,6 @@ def _parse_due_date(value: str | None) -> date | None:
         pass
     _LOGGER.warning("Could not parse due date: %s", s)
     return None
-
-
-
-
-
-class DominionSCBillDueDateSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):
-    """Bill due date (date only)."""
-
-    _attr_has_entity_name = True
-    _attr_icon = "mdi:calendar"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._attr_name = "Bill Due Date"
-        self._attr_unique_id = f"{entry.entry_id}_bill_due_date"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="Dominion SC Energy",
-            manufacturer="Dominion Energy South Carolina",
-            model="Utility Account",
-            entry_type=DeviceEntryType.SERVICE,
-        )
-
-    @property
-    def native_value(self) -> str | None:
-        acct = self.coordinator.account_summary
-        raw = acct.get("raw_data", {}) or {}
-        due = acct.get("due_date") or raw.get("account", {}).get("dueDate")
-        parsed = _parse_due_date(due)
-        return parsed.isoformat() if parsed else None
 
 
 class DominionSCLastPaymentSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):

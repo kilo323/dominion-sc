@@ -99,7 +99,6 @@ These additional informational sensors expose account and billing details (usefu
 
 | Entity | Unit / Type | Description |
 |--------|------------:|-------------|
-| Bill Due Date | date (ISO) | Due date for the current bill, parsed to a date when available |
 | Last Payment | $ | Most recent payment amount (USD) |
 | Account Balance | $ | Current account balance; textual values like `Bill Paid` are reported as `$0.00` |
 | Current Cost | $ | Current accumulated cost for billing period (from projection API) |
