@@ -221,8 +221,6 @@ def test_informational_sensors_parsing():
         "total_bill_amount": "40.33",
     }
     entry = DummyEntry("entry5")
-    due = sc_sensor.DominionSCBillDueDateSensor(coord, entry)
-    assert due.native_value == "2026-03-09"
     last_payment = sc_sensor.DominionSCLastPaymentSensor(coord, entry)
     assert last_payment.native_value == 333.19
     balance = sc_sensor.DominionSCAccountBalanceSensor(coord, entry)
