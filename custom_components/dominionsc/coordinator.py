@@ -88,6 +88,9 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             _LOGGER.debug("Could not recompute totals from ledgers on setup", exc_info=True)
         
         # Ensure backfill cycles are properly initialized after setup
+        self._initialize_backfill_cycles()
+        
+        # Ensure backfill cycles are properly initialized after setup
         # This ensures that backfill target changes are properly handled
         self._initialize_backfill_cycles()
         
@@ -1194,57 +1197,6 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         for key in (TOTAL_ELECTRIC_KWH, TOTAL_GAS_FT3, TOTAL_ELECTRIC_COST, TOTAL_GAS_COST):
             totals[key] = max(float(totals[key]), float(last.get(key, 0.0)))
             last[key] = float(totals[key])
-
-    def _set_last_sync(self) -> None:
-        """Set the last_sync timestamp in persistent state to now (ISO 8601)."""
-        try:
-            # Prefer timezone-aware ISO format
-            self._state["last_sync"] = datetime.now().astimezone().isoformat()
-        except Exception:
-            # Fallback to naive ISO format
-            self._state["last_sync"] = datetime.now().isoformat()
-
-    async def _save_state(self) -> None:
-        await self._store.async_save(self._state)
-
-    def _default_state(self) -> dict[str, Any]:
-        return {
-            "interval_ledger": {},
-            "interval_cost_ledger": {},
-            "daily_ledger": {},
-            "daily_cost_ledger": {},
-            "backfill": {
-                "cycles_completed": 0,
-                "missing_cycles": [],
-                "completed_cycles": [],
-            },
-            "backfill_cycles_target": DEFAULT_BACKFILL_CYCLES_TARGET,
-            "totals": {
-                TOTAL_ELECTRIC_KWH: 0.0,
-                TOTAL_GAS_FT3: 0.0,
-                TOTAL_ELECTRIC_COST: 0.0,
-                TOTAL_GAS_COST: 0.0,
-            },
-            "last_totals": {
-                TOTAL_ELECTRIC_KWH: 0.0,
-                TOTAL_GAS_FT3: 0.0,
-                TOTAL_ELECTRIC_COST: 0.0,
-                TOTAL_GAS_COST: 0.0,
-            },
-            "stats": {
-                "raw_interval_rows": 0,
-                "accepted_interval_rows": 0,
-            },
-            "statistics_import": {
-                "electric": [],
-                "gas": [],
-            },
-            # ISO 8601 timestamp of the last successful sync/update
-            "last_sync": None,
-            "statistics_rewrite_once_done": False,
-            # Latest fetched account/billing payloads (for informational sensors)
-            "account_summary": {},
-            "bill_projection": {},
             "current_daily_usage": {},
             "current_bill_summary": {},
         }
