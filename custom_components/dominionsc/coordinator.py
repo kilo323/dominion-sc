@@ -86,23 +86,10 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             self._recompute_totals_from_ledgers()
         except Exception:  # defensive: do not let a recompute break startup
             _LOGGER.debug("Could not recompute totals from ledgers on setup", exc_info=True)
-        
-        # Ensure backfill cycles are properly initialized after setup
-        self._initialize_backfill_cycles()
-        
-        # Ensure backfill cycles are properly initialized after setup
-        # This ensures that backfill target changes are properly handled
-        self._initialize_backfill_cycles()
-        
-        # Store the current target in state for consistency
-        target = self.backfill_cycles_target
-        if self._state.get("backfill_cycles_target") != target:
-            self._state["backfill_cycles_target"] = target
-            _LOGGER.debug("Stored backfill target %d in state", target)
-        
-        # Ensure backfill cycles are properly initialized after setup
-        self._initialize_backfill_cycles()
 
+        # Ensure backfill cycles are properly initialized after setup
+        self._initialize_backfill_cycles()
+        
     @property
     def totals(self) -> dict[str, float]:
         return self._state["totals"]
@@ -914,10 +901,9 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         allow_initialize_missing=False so they can early-exit when there are no
         incomplete cycles to process.
         """
-        # Always ensure backfill cycles are initialized before processing
-        self._initialize_backfill_cycles()
-        
-        if not allow_initialize_missing:
+        if allow_initialize_missing:
+            self._initialize_backfill_cycles()
+        else:
             # Manual invocation: if there are no missing cycles, warn and exit
             backfill_state = self._state.get("backfill", {})
             missing = backfill_state.get("missing_cycles", []) if isinstance(backfill_state, dict) else []
@@ -1108,7 +1094,6 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
     def _initialize_backfill_cycles(self) -> None:
         backfill = self._state["backfill"]
         if backfill["missing_cycles"]:
-            _LOGGER.debug("Backfill cycles already initialized with %d missing cycles", len(backfill["missing_cycles"]))
             return
 
         target = int(
@@ -1122,14 +1107,12 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         completed = set(backfill.get("completed_cycles", []))
 
         # Only add cycles that haven't already been completed
-        missing = [k for k in eligible_keys if k not in completed]
-        backfill["missing_cycles"] = missing
+        backfill["missing_cycles"] = [k for k in eligible_keys if k not in completed]
         _LOGGER.debug(
-            "Initialized backfill cycles: target=%d eligible=%d completed=%d missing=%d",
-            target,
+            "Initialized backfill cycles: eligible=%d completed=%d missing=%d",
             len(eligible_keys),
             len(completed),
-            len(missing),
+            len(backfill["missing_cycles"]),
         )
 
     @staticmethod
@@ -1197,6 +1180,56 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         for key in (TOTAL_ELECTRIC_KWH, TOTAL_GAS_FT3, TOTAL_ELECTRIC_COST, TOTAL_GAS_COST):
             totals[key] = max(float(totals[key]), float(last.get(key, 0.0)))
             last[key] = float(totals[key])
+
+    def _set_last_sync(self) -> None:
+        """Set the last_sync timestamp in persistent state to now (ISO 8601)."""
+        try:
+            # Prefer timezone-aware ISO format
+            self._state["last_sync"] = datetime.now().astimezone().isoformat()
+        except Exception:
+            # Fallback to naive ISO format
+            self._state["last_sync"] = datetime.now().isoformat()
+
+    async def _save_state(self) -> None:
+        await self._store.async_save(self._state)
+
+    def _default_state(self) -> dict[str, Any]:
+        return {
+            "interval_ledger": {},
+            "interval_cost_ledger": {},
+            "daily_ledger": {},
+            "daily_cost_ledger": {},
+            "backfill": {
+                "cycles_completed": 0,
+                "missing_cycles": [],
+                "completed_cycles": [],
+            },
+            "totals": {
+                TOTAL_ELECTRIC_KWH: 0.0,
+                TOTAL_GAS_FT3: 0.0,
+                TOTAL_ELECTRIC_COST: 0.0,
+                TOTAL_GAS_COST: 0.0,
+            },
+            "last_totals": {
+                TOTAL_ELECTRIC_KWH: 0.0,
+                TOTAL_GAS_FT3: 0.0,
+                TOTAL_ELECTRIC_COST: 0.0,
+                TOTAL_GAS_COST: 0.0,
+            },
+            "stats": {
+                "raw_interval_rows": 0,
+                "accepted_interval_rows": 0,
+            },
+            "statistics_import": {
+                "electric": [],
+                "gas": [],
+            },
+            # ISO 8601 timestamp of the last successful sync/update
+            "last_sync": None,
+            "statistics_rewrite_once_done": False,
+            # Latest fetched account/billing payloads (for informational sensors)
+            "account_summary": {},
+            "bill_projection": {},
             "current_daily_usage": {},
             "current_bill_summary": {},
         }
