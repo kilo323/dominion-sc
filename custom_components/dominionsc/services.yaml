@@ -24,6 +24,24 @@ run_backfill:
       selector:
         boolean:
 
+run_backfill_all:
+  name: Run backfill for all incomplete cycles
+  description: Process all incomplete billing cycle backfills for Dominion SC totals.
+  fields:
+    config_entry_id:
+      name: Config entry ID
+      description: Optional specific Dominion SC config entry ID.
+      required: false
+      selector:
+        text:
+    overwrite:
+      name: Overwrite existing cycles
+      description: Re-import all incomplete cycle data and replace prior stored values.
+      required: false
+      default: false
+      selector:
+        boolean:
+
 rewrite_statistics:
   name: Rewrite statistics
   description: Clear legacy dominionsc external statistics so Energy Dashboard uses recorder sensor statistics only.

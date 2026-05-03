@@ -276,6 +276,28 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         self.async_set_updated_data(dict(self.totals))
         _LOGGER.debug("Manual backfill finished: entry=%s totals=%s", self.config_entry.entry_id, self.totals)
 
+    async def async_run_backfill_all(self, overwrite: bool = False) -> None:
+        """Manually process all incomplete backfill cycles."""
+        _LOGGER.debug(
+            "Manual full backfill requested: entry=%s overwrite=%s",
+            self.config_entry.entry_id,
+            overwrite,
+        )
+        await self._ensure_authenticated()
+
+        if not self._state["backfill"].get("missing_cycles"):
+            self._initialize_backfill_cycles()
+
+        while self._state["backfill"].get("missing_cycles"):
+            await self._process_backfill(overwrite=overwrite, allow_initialize_missing=False)
+
+        await self._sync_external_statistics(force_rewrite=overwrite)
+        self._apply_monotonic_guard()
+        self._set_last_sync()
+        await self._save_state()
+        self.async_set_updated_data(dict(self.totals))
+        _LOGGER.debug("Manual full backfill finished: entry=%s totals=%s", self.config_entry.entry_id, self.totals)
+
     async def async_rewrite_statistics(self) -> None:
         """Rebuild recorder-backed sensor statistics and clean legacy external series."""
         _LOGGER.debug("Manual statistics rewrite requested: entry=%s", self.config_entry.entry_id)

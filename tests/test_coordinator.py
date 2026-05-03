@@ -179,6 +179,53 @@ async def test_process_backfill_applies_rows(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_async_run_backfill_all_processes_all_missing(monkeypatch):
+    entry = DummyEntry("e6")
+    coord = sc_coordinator.DominionSCCoordinator(hass=None, entry=entry)
+    coord._state["backfill"]["missing_cycles"] = [
+        "2026-01-01|2026-01-02",
+        "2026-02-01|2026-02-02",
+    ]
+
+    processed: list[str] = []
+
+    async def fake_ensure_authenticated():
+        pass
+
+    async def fake_process_backfill(overwrite, cycle_key=None, allow_initialize_missing=True):
+        assert cycle_key is None
+        assert allow_initialize_missing is False
+        current = coord._state["backfill"]["missing_cycles"].pop(0)
+        coord._state["backfill"]["completed_cycles"].append(current)
+        coord._state["backfill"]["cycles_completed"] += 1
+        processed.append(current)
+
+    async def fake_sync_external_statistics(force_rewrite):
+        processed.append("sync")
+
+    async def fake_save_state():
+        pass
+
+    monkeypatch.setattr(coord, "_ensure_authenticated", fake_ensure_authenticated)
+    monkeypatch.setattr(coord, "_process_backfill", fake_process_backfill)
+    monkeypatch.setattr(coord, "_sync_external_statistics", fake_sync_external_statistics)
+    monkeypatch.setattr(coord, "_save_state", fake_save_state)
+
+    await coord.async_run_backfill_all(overwrite=False)
+
+    assert processed == [
+        "2026-01-01|2026-01-02",
+        "2026-02-01|2026-02-02",
+        "sync",
+    ]
+    assert coord._state["backfill"]["missing_cycles"] == []
+    assert coord._state["backfill"]["completed_cycles"] == [
+        "2026-01-01|2026-01-02",
+        "2026-02-01|2026-02-02",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_sync_external_statistics_appends_and_rewrite(monkeypatch):
     entry = DummyEntry("e4")
     coord = sc_coordinator.DominionSCCoordinator(hass=None, entry=entry)

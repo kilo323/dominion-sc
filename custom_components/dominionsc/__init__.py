@@ -26,6 +26,7 @@ from .const import (
     PLATFORMS,
     SERVICE_REWRITE_STATISTICS,
     SERVICE_RUN_BACKFILL,
+    SERVICE_RUN_BACKFILL_ALL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,6 +38,17 @@ SERVICE_SCHEMA = (
             vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string,
             vol.Optional("overwrite", default=False): cv.boolean,
             vol.Optional("allow_initialize_missing", default=False): cv.boolean,
+        }
+    )
+    if vol is not None and cv is not None
+    else None
+)
+
+ALL_BACKFILL_SERVICE_SCHEMA = (
+    vol.Schema(
+        {
+            vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string,
+            vol.Optional("overwrite", default=False): cv.boolean,
         }
     )
     if vol is not None and cv is not None
@@ -86,6 +98,18 @@ async def async_setup_entry(hass, entry) -> bool:
             schema=SERVICE_SCHEMA,
         )
 
+    if not hass.services.has_service(DOMAIN, SERVICE_RUN_BACKFILL_ALL):
+
+        async def _handle_backfill_all_service(call) -> None:
+            await _async_handle_backfill_all_service(hass, call)
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_RUN_BACKFILL_ALL,
+            _handle_backfill_all_service,
+            schema=ALL_BACKFILL_SERVICE_SCHEMA,
+        )
+
     if not hass.services.has_service(DOMAIN, SERVICE_REWRITE_STATISTICS):
 
         async def _handle_rewrite_service(call) -> None:
@@ -110,6 +134,8 @@ async def async_unload_entry(hass, entry) -> bool:
     if not hass.data.get(DOMAIN):
         if hass.services.has_service(DOMAIN, SERVICE_RUN_BACKFILL):
             hass.services.async_remove(DOMAIN, SERVICE_RUN_BACKFILL)
+        if hass.services.has_service(DOMAIN, SERVICE_RUN_BACKFILL_ALL):
+            hass.services.async_remove(DOMAIN, SERVICE_RUN_BACKFILL_ALL)
         if hass.services.has_service(DOMAIN, SERVICE_REWRITE_STATISTICS):
             hass.services.async_remove(DOMAIN, SERVICE_REWRITE_STATISTICS)
 
@@ -167,6 +193,21 @@ async def _async_handle_backfill_service(hass, call) -> None:
             continue
         coordinator: DominionSCCoordinator = runtime[COORDINATOR]
         await coordinator.async_run_backfill(overwrite=overwrite, allow_initialize_missing=allow_initialize_missing)
+
+
+async def _async_handle_backfill_all_service(hass, call) -> None:
+    """Handle run_backfill_all service call for one or all config entries."""
+    from .coordinator import DominionSCCoordinator
+
+    target_entry_id = call.data.get(ATTR_CONFIG_ENTRY_ID)
+    overwrite = bool(call.data.get("overwrite", False))
+
+    entries = hass.data.get(DOMAIN, {})
+    for entry_id, runtime in entries.items():
+        if target_entry_id and entry_id != target_entry_id:
+            continue
+        coordinator: DominionSCCoordinator = runtime[COORDINATOR]
+        await coordinator.async_run_backfill_all(overwrite=overwrite)
 
 
 async def _async_handle_rewrite_statistics_service(hass, call) -> None:
