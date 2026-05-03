@@ -923,7 +923,18 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
 
         rows = await self._fetch_daily_rows(cycle.start, cycle.end)
         if not rows:
-            _LOGGER.warning("Backfill cycle %s returned no rows — check API or payload availability", cycle.key)
+            _LOGGER.warning(
+                "Backfill cycle %s returned no rows — marking as complete to avoid infinite retries. "
+                "Check API or payload availability.",
+                cycle.key
+            )
+            # Even if no rows returned, mark this cycle as complete to prevent stuck retries
+            backfill = self._state["backfill"]
+            if cycle.key in backfill["missing_cycles"]:
+                backfill["missing_cycles"].remove(cycle.key)
+            if cycle.key not in backfill["completed_cycles"]:
+                backfill["completed_cycles"].append(cycle.key)
+                backfill["cycles_completed"] += 1
             return
 
         today = datetime.now().date()
@@ -1093,8 +1104,6 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
 
     def _initialize_backfill_cycles(self) -> None:
         backfill = self._state["backfill"]
-        if backfill["missing_cycles"]:
-            return
 
         target = int(
             self.config_entry.options.get(
@@ -1102,6 +1111,9 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
                 self.config_entry.data.get(CONF_BACKFILL_CYCLES_TARGET, DEFAULT_BACKFILL_CYCLES_TARGET),
             )
         )
+        # Always regenerate from current target (don't return early if cycles exist)
+        # This ensures that when user updates target or config is refreshed,
+        # the cycle list is regenerated and old/stale cycles are replaced
         cycles = self._build_recent_monthly_cycles(now_date=datetime.now().date(), target=target)
         eligible_keys = [cycle.key for cycle in cycles]
         completed = set(backfill.get("completed_cycles", []))
@@ -1109,20 +1121,32 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         # Only add cycles that haven't already been completed
         backfill["missing_cycles"] = [k for k in eligible_keys if k not in completed]
         _LOGGER.debug(
-            "Initialized backfill cycles: eligible=%d completed=%d missing=%d",
+            "Initialized backfill cycles: eligible=%d completed=%d missing=%d target=%d",
             len(eligible_keys),
             len(completed),
             len(backfill["missing_cycles"]),
+            target,
         )
+        if backfill["missing_cycles"]:
+            _LOGGER.debug(
+                "First 3 missing cycles (oldest to newest): %s",
+                backfill["missing_cycles"][:3],
+            )
 
     @staticmethod
     def _build_recent_monthly_cycles(now_date: date, target: int) -> list[BillingCycle]:
+        """Build a list of recent complete calendar month cycles.
+        
+        Backfill targets completed past cycles only. The current month is handled
+        by regular polling, so it's excluded from the backfill list.
+        """
         cycles: list[BillingCycle] = []
         if target <= 0:
             return cycles
 
+        # Start from the first day of the previous month (exclude current month)
         month_start = date(now_date.year, now_date.month, 1)
-        current = month_start - timedelta(days=1)
+        current = month_start - timedelta(days=1)  # Last day of previous month
 
         while len(cycles) < target:
             cycle_start = date(current.year, current.month, 1)

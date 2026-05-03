@@ -279,3 +279,36 @@ python.exe .\scripts\query_ha_db.py -d 'C:\path\home-assistant_v2.db' -s 2026-04
 ```
 
 When to run it: before and after importing or rewriting external statistics, or when debugging Energy Dashboard/recorder anomalies. It complements `scripts/query_ha_stats.py` by providing quick heuristics and human-friendly summaries.
+
+## Testing & Validation Workflow
+
+**CRITICAL: Always run the test suite after making code changes.**
+
+### Running Tests
+
+After **every** change to `coordinator.py`, `sensor.py`, `button.py`, or other core integration logic, run pytests in tests folder.
+
+All 24 tests must pass before considering changes complete. Async tests require `pytest-asyncio` (included in `requirements-dev.txt`).
+
+If you see test failures:
+1. Do not proceed without fixing them
+2. Review the error output carefully — it will point to broken assumptions
+3. Do NOT skip or ignore failing tests
+
+### Test Coverage
+
+- `tests/test_coordinator.py`: Core coordinator logic including:
+  - Backfill cycle generation and initialization
+  - Empty-row handling (no infinite retries)
+  - Cycle selection and processing
+  - Statistics sync and recorder import
+  - Deduplication logic
+- `tests/test_sensor_unit.py`: Sensor parsing and formatting
+
+### Key Invariants Validated by Tests
+
+- Backfill cycles exclude the current month (only completed past periods)
+- Cycles are regenerated on each initialization (not stuck with stale cycles)
+- Empty backfill responses mark cycles complete (no infinite retries)
+- Monotonic totals never decrease
+- Statistics are properly deduplicated
