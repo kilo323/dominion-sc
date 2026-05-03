@@ -143,6 +143,15 @@ Manually trigger a backfill cycle.
 | `overwrite` | boolean | `false` | If `true`, re-imports the cycle and replaces prior stored values |
 | `allow_initialize_missing` | boolean | `false` | If `true`, allow the service to repopulate the internal `missing_cycles` list when empty (forces initialization). If `false` (default), manual calls will warn-and-exit when there are no incomplete cycles to process. |
 
+### `dominionsc.run_backfill_all`
+
+Manually trigger all currently incomplete backfill cycles.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `config_entry_id` | string | _(all entries)_ | Target a specific config entry |
+| `overwrite` | boolean | `false` | If `true`, re-imports all incomplete cycles and replaces prior stored values |
+
 ### `dominionsc.rewrite_statistics`
 
 Clears legacy external statistics (`dominionsc:*` IDs) and force-rewrites all historical data into the recorder `sensor.*` statistics path.
