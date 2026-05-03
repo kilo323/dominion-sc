@@ -86,6 +86,19 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             self._recompute_totals_from_ledgers()
         except Exception:  # defensive: do not let a recompute break startup
             _LOGGER.debug("Could not recompute totals from ledgers on setup", exc_info=True)
+        
+        # Ensure backfill cycles are properly initialized after setup
+        # This ensures that backfill target changes are properly handled
+        self._initialize_backfill_cycles()
+        
+        # Store the current target in state for consistency
+        target = self.backfill_cycles_target
+        if self._state.get("backfill_cycles_target") != target:
+            self._state["backfill_cycles_target"] = target
+            _LOGGER.debug("Stored backfill target %d in state", target)
+        
+        # Ensure backfill cycles are properly initialized after setup
+        self._initialize_backfill_cycles()
 
     @property
     def totals(self) -> dict[str, float]:
@@ -898,9 +911,10 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         allow_initialize_missing=False so they can early-exit when there are no
         incomplete cycles to process.
         """
-        if allow_initialize_missing:
-            self._initialize_backfill_cycles()
-        else:
+        # Always ensure backfill cycles are initialized before processing
+        self._initialize_backfill_cycles()
+        
+        if not allow_initialize_missing:
             # Manual invocation: if there are no missing cycles, warn and exit
             backfill_state = self._state.get("backfill", {})
             missing = backfill_state.get("missing_cycles", []) if isinstance(backfill_state, dict) else []
@@ -1091,6 +1105,7 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
     def _initialize_backfill_cycles(self) -> None:
         backfill = self._state["backfill"]
         if backfill["missing_cycles"]:
+            _LOGGER.debug("Backfill cycles already initialized with %d missing cycles", len(backfill["missing_cycles"]))
             return
 
         target = int(
@@ -1104,12 +1119,14 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         completed = set(backfill.get("completed_cycles", []))
 
         # Only add cycles that haven't already been completed
-        backfill["missing_cycles"] = [k for k in eligible_keys if k not in completed]
+        missing = [k for k in eligible_keys if k not in completed]
+        backfill["missing_cycles"] = missing
         _LOGGER.debug(
-            "Initialized backfill cycles: eligible=%d completed=%d missing=%d",
+            "Initialized backfill cycles: target=%d eligible=%d completed=%d missing=%d",
+            target,
             len(eligible_keys),
             len(completed),
-            len(backfill["missing_cycles"]),
+            len(missing),
         )
 
     @staticmethod
@@ -1201,6 +1218,7 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
                 "missing_cycles": [],
                 "completed_cycles": [],
             },
+            "backfill_cycles_target": DEFAULT_BACKFILL_CYCLES_TARGET,
             "totals": {
                 TOTAL_ELECTRIC_KWH: 0.0,
                 TOTAL_GAS_FT3: 0.0,
