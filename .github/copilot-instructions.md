@@ -64,8 +64,15 @@ Primary goals:
 - **Backfill/historical**: use daily endpoint (`get_daily_usage`) for efficiency.
 - Daily endpoint can lag by ~2 days; use lag-safe sliding window upsert behavior.
 - Dominion API may return full billing cycle including future zero-value placeholder days; these must be filtered out.
- - Recent rows inside the daily lookback window that contain only null/zero values for consumption and cost should also be treated as placeholders and skipped during daily reconciliation. Dominion often provides these values a few days later; the lookback window will upsert them when available.
- - For finalized/backfill cycles, treat zero electric consumption as suspect and skip it during import (trust zero for gas and cost). This avoids importing premature zero-days that can break cumulative continuity.
+- Zero-value filtering decision table:
+
+  | Scenario | Electric Consumption | Gas Consumption | Cost | Action |
+  |---|---|---|---|---|
+  | Future-dated zero | Skip | Skip | Skip | Filter row entirely |
+  | Recent lookback null/zero | Skip | Trust | Trust | Conditional per fuel |
+  | Finalized/backfill zero | Skip | Trust | Trust | Conditional per fuel |
+
+  Rationale: Dominion often provides placeholder zeros for electric consumption that arrive with real data days later; gas and cost zeros in finalized cycles are legitimate.
 
 ### Dedupe & Idempotency
 - Never double-count data.
@@ -95,7 +102,7 @@ Energy Dashboard-facing usage sensors use `total_increasing` (consumption) or `t
 
 ### Historical Statistics Import
 - After each backfill or scheduled update, import daily cumulative sums into HA recorder long-term statistics.
-- Statistics are written to `sensor.*` entity statistic IDs (recorder source path).
+- Statistics are written to recorder-native `sensor.*` entity statistic IDs (not the legacy `dominionsc:*` external format).
 - Four series are maintained:
   - `sensor.electric_cumulative_consumption` (kWh, from `daily_ledger`)
   - `sensor.gas_cumulative_consumption` (ft³, from `daily_ledger`)
@@ -104,10 +111,9 @@ Energy Dashboard-facing usage sensors use `total_increasing` (consumption) or `t
 - Append mode (`async_add_external_statistics`) for incremental day imports.
 - Import mode (`async_import_statistics`) for initial or rewrite imports.
 - Both recorder stats functions are **not awaitable** despite `async_` naming; do NOT use `await`.
-- Include `mean_type=StatisticMeanType.NONE` in metadata to satisfy HA 2026.11+ requirements.
+- Include `mean_type=StatisticMeanType.NONE` in metadata for forward compatibility (required starting HA 2026.11; safe to include on 2026.4.0).
 - Future-dated zero-value placeholder rows must be filtered before import.
- - Future-dated zero-value placeholder rows must be filtered before import.
- - Additionally, filter recent null/zero rows (within the daily lookback window) before upserting into ledgers or building `StatisticData`, because parsing may convert `null` to `0.0`. Apply fuel-aware rules: skip finalized zero electric consumption but trust finalized zero gas/cost.
+ - Additionally, filter recent null/zero rows (within the daily lookback window) before upserting into ledgers or building `StatisticData`, because parsing may convert `null` to `0.0`. Apply fuel-aware filtering per the decision table in Data Sources above.
 - If newly backfilled days are older than previously imported days, auto-trigger full rewrite for that series.
 - Track imported days per series in persistent state for idempotency.
 
@@ -162,15 +168,15 @@ These sensors expose account and billing metadata useful for dashboards and auto
 
 7. Bill Status (string) — source: `account_summary.raw_data.account.accountStatus` or `account_summary.account_balance` textual fallback.
 8. Last Payment (monetary, $) — source: `account_summary.last_payment_amount` (strings like `$333.19` parsed to numeric 333.19).
-10. Account Balance (monetary, $) — source: `account_summary.account_balance`. Treat textual `Bill Paid` (case-insensitive) as numeric `0.0`.
-11. Current Cost (monetary, $) — source: `bill_projection.currentPrice`.
-12. Projected Price (monetary, $) — source: `bill_projection.projectionPrice`.
-13. Days Left (integer) — source: `bill_projection.daysLeft`.
-14. Electric Charges (monetary, $) — source: `current_daily_usage.bill_summary.electric_total` (or `electricTotalAmount` in raw payload).
-15. Gas Charges (monetary, $) — source: `current_daily_usage.bill_summary.gas_total`.
-16. Electric Other Charges (monetary, $) — source: `current_daily_usage.bill_summary.electric_other_charges`.
-17. Gas Other Charges (monetary, $) — source: `current_daily_usage.bill_summary.gas_other_charges`.
-18. Total Charges (monetary, $) — source: `current_daily_usage.bill_summary.total_bill_amount`.
+9. Account Balance (monetary, $) — source: `account_summary.account_balance`. Treat textual `Bill Paid` (case-insensitive) as numeric `0.0`.
+10. Current Cost (monetary, $) — source: `bill_projection.currentPrice`.
+11. Projected Price (monetary, $) — source: `bill_projection.projectionPrice`.
+12. Days Left (integer) — source: `bill_projection.daysLeft`.
+13. Electric Charges (monetary, $) — source: `current_daily_usage.bill_summary.electric_total` (or `electricTotalAmount` in raw payload).
+14. Gas Charges (monetary, $) — source: `current_daily_usage.bill_summary.gas_total`.
+15. Electric Other Charges (monetary, $) — source: `current_daily_usage.bill_summary.electric_other_charges`.
+16. Gas Other Charges (monetary, $) — source: `current_daily_usage.bill_summary.gas_other_charges`.
+17. Total Charges (monetary, $) — source: `current_daily_usage.bill_summary.total_bill_amount`.
 
 Parsing & state rules for contributors
 - Store fetched payloads in the coordinator persistent state keys: `account_summary`, `bill_projection`, `current_daily_usage`, and `current_bill_summary` (a convenience alias for `current_daily_usage.bill_summary`).
@@ -180,16 +186,16 @@ Parsing & state rules for contributors
 - Keep these informational sensors separate from the cumulative/statistics sensors; they do not affect ledger or recorder import logic.
 
 ### Button Entities
-7. Run Backfill — calls `dominionsc.run_backfill` service
-8. Cleanup External Statistics — calls `dominionsc.rewrite_statistics` service
+18. Run Backfill — calls `dominionsc.run_backfill` service
+19. Cleanup External Statistics — calls `dominionsc.rewrite_statistics` service
 
 ## Service Requirements
 ### `run_backfill`
-- Optional `config_entry_id` (string)
+- Optional `config_entry_id` (string) — if omitted, defaults to the single active config entry; raises an error if multiple entries exist.
 - Optional `overwrite` (boolean, default `false`)
 
 ### `rewrite_statistics`
-- Optional `config_entry_id` (string)
+- Optional `config_entry_id` (string) — if omitted, defaults to the single active config entry; raises an error if multiple entries exist.
 - Clears legacy `dominionsc:*` external statistics
 - Force-rewrites all `sensor.*` historical statistics
 
@@ -244,7 +250,7 @@ Add any additional checks you need to the script (deltas, CSV export, ledger com
 - `recorder.async_clear_statistics()` is also NOT awaitable.
 - `StatisticMeanType.NONE` must be included in metadata starting HA 2026.11.
 - `SensorDeviceClass.MONETARY` only supports `state_class=TOTAL` (not `TOTAL_INCREASING`).
-- Statistic IDs must be lowercase, single-colon format, no hyphens (e.g., `dominionsc:abc_def`).
+- Legacy external statistic IDs used `dominionsc:*` prefix (lowercase, single-colon, no hyphens). Current implementation writes to recorder-native `sensor.*` statistic IDs instead. The `rewrite_statistics` service clears the legacy `dominionsc:*` entries.
 - Energy Dashboard entity picker requires at least one recorder statistics compilation cycle (~5 min) before entities appear.
 
 ## Notes
