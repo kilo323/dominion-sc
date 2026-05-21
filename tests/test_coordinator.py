@@ -338,6 +338,66 @@ async def test_sync_external_statistics_forces_rewrite_when_imported_days_missin
 
 
 @pytest.mark.asyncio
+async def test_sync_external_statistics_forces_rewrite_on_sum_drift(monkeypatch):
+    """When ledger values change for previously-imported days, the cumulative sum
+    at the max imported day will differ from what was stored. This should force
+    a rewrite to avoid negative deltas in the Energy Dashboard."""
+    entry = DummyEntry("e6")
+    coord = sc_coordinator.DominionSCCoordinator(hass=None, entry=entry)
+
+    # Populate daily ledger — simulate data that has changed since last import
+    coord._state["daily_ledger"] = {
+        "electric|2026-01-01": 5.0,   # was 10.0 when originally imported
+        "electric|2026-01-02": 8.0,   # was 10.0 when originally imported
+        "electric|2026-01-03": 7.0,   # new day to import
+    }
+    # Simulate previously imported days with a stored sum that reflects OLD values
+    coord._state["statistics_import"]["electric"] = ["2026-01-01", "2026-01-02"]
+    # The stored sum at max imported day (2026-01-02) was 10+10=20 with old values
+    coord._state["statistics_import"]["electric_sum_at_max"] = 20.0
+
+    # Create fake recorder and statistics modules
+    class FakeRecorder:
+        def __init__(self):
+            self.cleared = []
+        def async_clear_statistics(self, ids):
+            self.cleared.extend(ids)
+
+    fake_rec = FakeRecorder()
+    recorded = {}
+
+    def fake_async_import_statistics(hass, metadata, to_import):
+        recorded["metadata"] = metadata
+        recorded["to_import"] = list(to_import)
+
+    import sys, types
+
+    recorder_mod = types.ModuleType("homeassistant.components.recorder")
+    recorder_mod.get_instance = lambda hass: fake_rec
+    stats_mod = types.ModuleType("homeassistant.components.recorder.statistics")
+    stats_mod.StatisticData = lambda **kwargs: kwargs
+    stats_mod.StatisticMetaData = lambda **kwargs: types.SimpleNamespace(**kwargs)
+    stats_mod.StatisticMeanType = types.SimpleNamespace(NONE=None)
+    stats_mod.async_import_statistics = fake_async_import_statistics
+
+    monkeypatch.setitem(sys.modules, "homeassistant.components.recorder", recorder_mod)
+    monkeypatch.setitem(sys.modules, "homeassistant.components.recorder.statistics", stats_mod)
+
+    await coord._sync_external_statistics(force_rewrite=False)
+
+    # Should have detected sum drift (5+8=13 != stored 20) and forced a rewrite
+    # which clears statistics and reimports all days
+    assert "electric" in [sid.split("_energy_")[1].split("_cumulative")[0]
+                          for sid in fake_rec.cleared] or len(fake_rec.cleared) > 0
+    assert "to_import" in recorded
+    # All 3 days should be imported (rewrite reimports everything)
+    assert len(recorded["to_import"]) == 3
+    # Verify cumulative sums are correct: 5, 13, 20
+    sums = [p["sum"] for p in recorded["to_import"]]
+    assert sums == [5.0, 13.0, 20.0]
+
+
+@pytest.mark.asyncio
 async def test_process_intervals_dedupe(monkeypatch):
     # Prepare payloads with two intervals
     electric_payload = {

@@ -592,6 +592,29 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
                         series_key,
                     )
 
+            # Detect cumulative sum drift: if ledger values for previously-
+            # imported days changed (e.g. daily_reconcile overwrites with
+            # updated API data), the running_sum at max_imported_day will
+            # differ from what was written to the recorder last time. Appending
+            # new points with shifted sums creates negative deltas in the
+            # Energy Dashboard. Force a rewrite to correct the full series.
+            if not rewrite_for_fuel and imported_days:
+                max_imported_iso = max(imported_days)
+                precompute_sum = 0.0
+                for day, consumption in daily_points:
+                    precompute_sum += consumption
+                    if day.isoformat() == max_imported_iso:
+                        break
+                stored_sum_key = f"{series_key}_sum_at_max"
+                stored_max_sum = statistics_state.get(stored_sum_key)
+                if stored_max_sum is not None and abs(precompute_sum - stored_max_sum) > 0.001:
+                    rewrite_for_fuel = True
+                    _LOGGER.info(
+                        "Statistics sync forcing rewrite for %s: cumulative sum at max imported day "
+                        "changed (stored=%.3f current=%.3f) — ledger values were updated overnight",
+                        series_key, stored_max_sum, precompute_sum,
+                    )
+
             if rewrite_for_fuel:
                 imported_days.clear()
                 recorder = get_instance(self.hass)
@@ -615,6 +638,10 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
                 imported_days.add(day_key)
 
             if not to_import:
+                # Even when nothing new to import, update the stored sum so
+                # drift detection stays accurate as ledger values settle.
+                if imported_days:
+                    statistics_state[f"{series_key}_sum_at_max"] = running_sum
                 _LOGGER.debug("Statistics sync no-op for %s: nothing new to import", series_key)
                 continue
 
@@ -636,12 +663,17 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             async_import_statistics(self.hass, metadata, to_import)
 
             statistics_state[series_key] = sorted(imported_days)
+            # Store the running_sum at the max imported day so we can detect
+            # cumulative sum drift on the next run (ledger value changes that
+            # would produce negative deltas if we just append).
+            statistics_state[f"{series_key}_sum_at_max"] = running_sum
             _LOGGER.debug(
-                "Statistics sync complete: series=%s mode=%s imported=%s tracked_days=%s",
+                "Statistics sync complete: series=%s mode=%s imported=%s tracked_days=%s sum_at_max=%.3f",
                 series_key,
                 "rewrite" if rewrite_for_fuel else "append",
                 len(to_import),
                 len(statistics_state[series_key]),
+                running_sum,
             )
 
     async def _ensure_authenticated(self) -> None:
