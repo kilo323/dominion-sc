@@ -385,7 +385,12 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             await self._daily_reconcile(datetime.now().date())
             # Process at most one missing backfill cycle per scheduled update
             await self._process_backfill(overwrite=False)
-            await self._sync_external_statistics(force_rewrite=False)
+            # One-time migration: clear auto-compiled recorder rows that
+            # conflict with our imported statistics after state_class removal.
+            force_rewrite = self._check_statistics_migration()
+            # One-time fix: re-create external statistics with proper unit_class
+            force_rewrite = self._check_unit_class_fix() or force_rewrite
+            await self._sync_external_statistics(force_rewrite=force_rewrite)
             self._apply_monotonic_guard()
             # Update last_sync timestamp for scheduled/automatic update
             self._set_last_sync()
@@ -395,7 +400,7 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             raise UpdateFailed(str(err)) from err
 
     async def _clear_external_statistics(self) -> None:
-        """Clear custom external dominionsc statistics IDs for this config entry."""
+        """Clear all legacy statistic IDs (both old dominionsc:entry_* and sensor.* formats)."""
         try:
             from homeassistant.components.recorder import get_instance  # pylint: disable=import-outside-toplevel
         except Exception as err:  # pylint: disable=broad-except
@@ -410,31 +415,33 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             )
             if stat_id
         ]
+        # Also clear old sensor.* based statistic IDs that conflicted with
+        # the recorder's auto-compilation (the previous architecture).
+        statistic_ids.extend(self.get_legacy_sensor_statistic_ids())
+
         if not statistic_ids:
             return
 
         recorder = get_instance(self.hass)
         recorder.async_clear_statistics(statistic_ids)
-        _LOGGER.info("Cleared external statistic IDs: %s", statistic_ids)
+        _LOGGER.info("Cleared legacy statistic IDs: %s", statistic_ids)
 
     def get_statistic_id(self, total_key: str) -> str | None:
-        """Return recorder statistic_id (sensor entity based) used by Energy Dashboard."""
-        # The actual entity IDs created by this integration use the device
-        # name "Dominion SC Energy" and HA's entity naming rules. Those
-        # entities are generated as e.g.
-        #   sensor.dominion_sc_energy_electric_cumulative_consumption
-        # Importing statistics under the plain names (e.g. "sensor.electric_cumulative_consumption")
-        # will not link the recorder statistics to the real entity_id and
-        # therefore they won't appear as selectable Energy Dashboard sensors.
-        #
-        # Use the device-based entity IDs so recorder data matches the
-        # actual `entity_id` present in the entity registry.
-        base = "dominion_sc_energy"
+        """Return external statistic_id for Energy Dashboard historical data.
+
+        Uses the 'dominionsc' source prefix so these statistics are completely
+        separate from the HA recorder's auto-compiled entity statistics.  This
+        avoids conflicts where the recorder writes sum=0 rows after restarts
+        that create negative deltas in the Energy Dashboard.
+
+        External statistics appear in the Energy Dashboard picker under
+        'External statistics' and can be selected for grid/gas/cost tracking.
+        """
         mapping = {
-            TOTAL_ELECTRIC_KWH: f"sensor.{base}_electric_cumulative_consumption",
-            TOTAL_GAS_FT3: f"sensor.{base}_gas_cumulative_consumption",
-            TOTAL_ELECTRIC_COST: f"sensor.{base}_electric_cumulative_cost",
-            TOTAL_GAS_COST: f"sensor.{base}_gas_cumulative_cost",
+            TOTAL_ELECTRIC_KWH: f"{DOMAIN}:electric_cumulative_consumption",
+            TOTAL_GAS_FT3: f"{DOMAIN}:gas_cumulative_consumption",
+            TOTAL_ELECTRIC_COST: f"{DOMAIN}:electric_cumulative_cost",
+            TOTAL_GAS_COST: f"{DOMAIN}:gas_cumulative_cost",
         }
         return mapping.get(total_key)
 
@@ -447,30 +454,50 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         }
         return mapping.get(total_key)
 
+    def get_legacy_sensor_statistic_ids(self) -> list[str]:
+        """Return previous sensor.* statistic_ids that conflicted with recorder.
+
+        These were used before switching to external statistics and caused
+        negative deltas because the HA recorder also auto-compiled into them.
+        """
+        base = "dominion_sc_energy"
+        return [
+            f"sensor.{base}_electric_cumulative_consumption",
+            f"sensor.{base}_gas_cumulative_consumption",
+            f"sensor.{base}_electric_cumulative_cost",
+            f"sensor.{base}_gas_cumulative_cost",
+        ]
+
     async def _sync_external_statistics(self, *, force_rewrite: bool = False) -> None:
-        """Import historical daily usage into recorder sensor.* statistics with day timestamps."""
+        """Import historical daily usage into external dominionsc:* statistics with day timestamps.
+
+        Uses external statistics (source='dominionsc') to avoid conflicts with
+        the HA recorder's auto-compiled entity statistics. The recorder compiles
+        hourly statistics for sensors with state_class and can reset sum=0 after
+        restarts; external statistics are completely independent of that process.
+        """
         try:
             from homeassistant.components.recorder import get_instance  # pylint: disable=import-outside-toplevel
             from homeassistant.components.recorder.statistics import (  # pylint: disable=import-outside-toplevel
                 StatisticData,
                 StatisticMetaData,
                 StatisticMeanType,
-                async_import_statistics,
+                async_add_external_statistics,
             )
         except Exception as err:  # pylint: disable=broad-except
             _LOGGER.warning("Recorder statistics import unavailable: %s", err)
             return
 
         statistics_state = self._state.setdefault("statistics_import", {"electric": [], "gas": []})
-        fuel_config: list[tuple[str, str, str, str]] = [
-            # (series_key, total_key, unit, ledger_name)
-            ("electric", TOTAL_ELECTRIC_KWH, "kWh", "daily_ledger"),
-            ("gas", TOTAL_GAS_FT3, "ft³", "daily_ledger"),
-            ("electric_cost", TOTAL_ELECTRIC_COST, "$", "daily_cost_ledger"),
-            ("gas_cost", TOTAL_GAS_COST, "$", "daily_cost_ledger"),
+        fuel_config: list[tuple[str, str, str, str, str | None]] = [
+            # (series_key, total_key, unit, ledger_name, unit_class)
+            ("electric", TOTAL_ELECTRIC_KWH, "kWh", "daily_ledger", "energy"),
+            ("gas", TOTAL_GAS_FT3, "ft³", "daily_ledger", "volume"),
+            ("electric_cost", TOTAL_ELECTRIC_COST, "$", "daily_cost_ledger", None),
+            ("gas_cost", TOTAL_GAS_COST, "$", "daily_cost_ledger", None),
         ]
 
-        for series_key, total_key, unit, ledger_name in fuel_config:
+        for series_key, total_key, unit, ledger_name, unit_class in fuel_config:
             # For cost series, the ledger keys use "electric|date" / "gas|date" (no "_cost" prefix)
             fuel_prefix = series_key.replace("_cost", "")
             imported_days_raw = statistics_state.setdefault(series_key, [])
@@ -652,15 +679,18 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
                 mean_type=StatisticMeanType.NONE,
                 has_sum=True,
                 name=f"Dominion SC {friendly_label}",
-                source="recorder",
+                source=DOMAIN,
                 statistic_id=statistic_id,
-                unit_class=None,
+                unit_class=unit_class,
                 unit_of_measurement=unit,
             )
 
-            # NOTE: Despite the async-style name, this is not an awaitable coroutine
+            # NOTE: Despite the async-style name, these are not awaitable coroutines
             # in current HA recorder API. Do not add `await` here.
-            async_import_statistics(self.hass, metadata, to_import)
+            # For external statistics, always use async_add_external_statistics.
+            # The rewrite path already cleared existing rows above via
+            # recorder.async_clear_statistics, so this inserts fresh data.
+            async_add_external_statistics(self.hass, metadata, to_import)
 
             statistics_state[series_key] = sorted(imported_days)
             # Store the running_sum at the max imported day so we can detect
@@ -1227,6 +1257,79 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
 
         start_s, end_s = backfill["missing_cycles"][0].split("|")
         return BillingCycle(start=date.fromisoformat(start_s), end=date.fromisoformat(end_s))
+
+    def _check_statistics_migration(self) -> bool:
+        """Return True (force rewrite) once to migrate from sensor.* to external statistics.
+
+        Previous versions imported statistics into sensor.* statistic_ids with
+        source='recorder'. This conflicted with the HA recorder's auto-compiled
+        hourly statistics, creating negative deltas after restarts. The migration
+        clears old sensor.* rows and reimports into dominionsc:* external IDs.
+        """
+        if self._state.get("external_statistics_migration_done"):
+            return False
+        _LOGGER.info(
+            "One-time statistics migration: switching from sensor.* to "
+            "dominionsc:* external statistics (clears old conflicting rows)"
+        )
+        # Clear old sensor.* statistics that conflicted with recorder
+        try:
+            from homeassistant.components.recorder import get_instance  # pylint: disable=import-outside-toplevel
+            recorder = get_instance(self.hass)
+            legacy_ids = self.get_legacy_sensor_statistic_ids()
+            if legacy_ids:
+                recorder.async_clear_statistics(legacy_ids)
+                _LOGGER.info("Migration: cleared old sensor.* statistic IDs: %s", legacy_ids)
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.debug("Migration: could not clear old sensor.* stats", exc_info=True)
+        # Reset imported_days tracking so all data is reimported into new IDs
+        stats_state = self._state.get("statistics_import", {})
+        for key in list(stats_state.keys()):
+            if not key.endswith("_sum_at_max"):
+                stats_state[key] = []
+            else:
+                del stats_state[key]
+        self._state["external_statistics_migration_done"] = True
+        return True
+
+    def _check_unit_class_fix(self) -> bool:
+        """Return True (force rewrite) once to fix unit_class=None in external statistics.
+
+        Earlier versions created external statistics metadata without unit_class,
+        which prevents the Energy Dashboard picker from discovering them.  Clear
+        existing external statistics so they get re-created with proper unit_class
+        (energy/volume/monetary) on the next sync.
+        """
+        if self._state.get("unit_class_fix_applied"):
+            return False
+        _LOGGER.info(
+            "One-time unit_class fix: clearing external statistics to "
+            "re-create with proper unit_class for Energy Dashboard discovery"
+        )
+        try:
+            from homeassistant.components.recorder import get_instance  # pylint: disable=import-outside-toplevel
+            recorder = get_instance(self.hass)
+            ext_ids = [
+                self.get_statistic_id(TOTAL_ELECTRIC_KWH),
+                self.get_statistic_id(TOTAL_GAS_FT3),
+                self.get_statistic_id(TOTAL_ELECTRIC_COST),
+                self.get_statistic_id(TOTAL_GAS_COST),
+            ]
+            ext_ids = [sid for sid in ext_ids if sid]
+            if ext_ids:
+                recorder.async_clear_statistics(ext_ids)  # do not await
+                _LOGGER.info("unit_class fix: cleared external statistic IDs: %s", ext_ids)
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.debug("unit_class fix: could not clear external stats", exc_info=True)
+        # Reset imported_days so all data is reimported with correct metadata
+        stats_state = self._state.get("statistics_import", {})
+        for key in list(stats_state.keys()):
+            if not key.endswith("_sum_at_max"):
+                stats_state[key] = []
+            else:
+                del stats_state[key]
+        self._state["unit_class_fix_applied"] = True
+        return True
 
     def _upsert_daily(self, key: str, value: float, overwrite: bool, total_key: str) -> None:
         value = max(float(value), 0.0)
