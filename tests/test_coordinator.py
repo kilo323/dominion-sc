@@ -247,8 +247,13 @@ async def test_sync_external_statistics_appends_and_rewrite(monkeypatch):
 
     recorded_calls = {}
 
+    def fake_async_add_external_statistics(hass, metadata, to_import):
+        # record call for assertions (append mode)
+        recorded_calls['metadata'] = metadata
+        recorded_calls['to_import'] = list(to_import)
+
     def fake_async_import_statistics(hass, metadata, to_import):
-        # record call for assertions
+        # record call for assertions (rewrite mode)
         recorded_calls['metadata'] = metadata
         recorded_calls['to_import'] = list(to_import)
 
@@ -263,6 +268,7 @@ async def test_sync_external_statistics_appends_and_rewrite(monkeypatch):
     stats_mod.StatisticMetaData = lambda **kwargs: types.SimpleNamespace(**kwargs)
     stats_mod.StatisticMeanType = types.SimpleNamespace(NONE=None)
     stats_mod.async_import_statistics = fake_async_import_statistics
+    stats_mod.async_add_external_statistics = fake_async_add_external_statistics
 
     monkeypatch.setitem(sys.modules, "homeassistant.components.recorder", recorder_mod)
     monkeypatch.setitem(sys.modules, "homeassistant.components.recorder.statistics", stats_mod)
@@ -273,6 +279,9 @@ async def test_sync_external_statistics_appends_and_rewrite(monkeypatch):
     # Verify import was attempted and to_import populated
     assert 'metadata' in recorded_calls
     assert len(recorded_calls['to_import']) >= 1
+    # Verify metadata uses external source
+    assert recorded_calls['metadata'].source == "dominionsc"
+    assert recorded_calls['metadata'].statistic_id.startswith("dominionsc:")
 
 
 @pytest.mark.asyncio
@@ -310,6 +319,10 @@ async def test_sync_external_statistics_forces_rewrite_when_imported_days_missin
         recorded["metadata"] = metadata
         recorded["to_import"] = list(to_import)
 
+    def fake_async_add_external_statistics(hass, metadata, to_import):
+        recorded["metadata"] = metadata
+        recorded["to_import"] = list(to_import)
+
     import sys, types
 
     recorder_mod = types.ModuleType("homeassistant.components.recorder")
@@ -320,6 +333,7 @@ async def test_sync_external_statistics_forces_rewrite_when_imported_days_missin
     stats_mod.StatisticMetaData = lambda **kwargs: types.SimpleNamespace(**kwargs)
     stats_mod.StatisticMeanType = types.SimpleNamespace(NONE=None)
     stats_mod.async_import_statistics = fake_async_import_statistics
+    stats_mod.async_add_external_statistics = fake_async_add_external_statistics
 
     monkeypatch.setitem(sys.modules, "homeassistant.components.recorder", recorder_mod)
     monkeypatch.setitem(sys.modules, "homeassistant.components.recorder.statistics", stats_mod)
@@ -370,6 +384,10 @@ async def test_sync_external_statistics_forces_rewrite_on_sum_drift(monkeypatch)
         recorded["metadata"] = metadata
         recorded["to_import"] = list(to_import)
 
+    def fake_async_add_external_statistics(hass, metadata, to_import):
+        recorded["metadata"] = metadata
+        recorded["to_import"] = list(to_import)
+
     import sys, types
 
     recorder_mod = types.ModuleType("homeassistant.components.recorder")
@@ -379,6 +397,7 @@ async def test_sync_external_statistics_forces_rewrite_on_sum_drift(monkeypatch)
     stats_mod.StatisticMetaData = lambda **kwargs: types.SimpleNamespace(**kwargs)
     stats_mod.StatisticMeanType = types.SimpleNamespace(NONE=None)
     stats_mod.async_import_statistics = fake_async_import_statistics
+    stats_mod.async_add_external_statistics = fake_async_add_external_statistics
 
     monkeypatch.setitem(sys.modules, "homeassistant.components.recorder", recorder_mod)
     monkeypatch.setitem(sys.modules, "homeassistant.components.recorder.statistics", stats_mod)
@@ -387,8 +406,7 @@ async def test_sync_external_statistics_forces_rewrite_on_sum_drift(monkeypatch)
 
     # Should have detected sum drift (5+8=13 != stored 20) and forced a rewrite
     # which clears statistics and reimports all days
-    assert "electric" in [sid.split("_energy_")[1].split("_cumulative")[0]
-                          for sid in fake_rec.cleared] or len(fake_rec.cleared) > 0
+    assert len(fake_rec.cleared) > 0
     assert "to_import" in recorded
     # All 3 days should be imported (rewrite reimports everything)
     assert len(recorded["to_import"]) == 3
