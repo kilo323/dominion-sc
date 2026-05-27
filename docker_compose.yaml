@@ -11,5 +11,6 @@ services:
       - ./custom_components/dominionsc:/config/custom_components/dominionsc
     ports:
       - 8123:8123
-    network_mode: "host"
+    # had to comment this out for networking to work under Windows, but needed for Linux in vscode
+    # network_mode: "host"
     restart: unless-stopped

@@ -17,6 +17,20 @@ A custom Home Assistant integration for **Dominion Energy South Carolina** that 
 - **Persistent state** — survives restarts without data loss or double-counting
 - **Manual backfill & statistics rewrite** — UI buttons and services for on-demand control
 
+## ⚠️ Upgrade Notice — Energy Dashboard Reconfiguration Required
+
+> **If you are upgrading from release `2026.05.03.04` or earlier**, you must update your Energy Dashboard configuration.
+>
+> This version switches historical statistics from entity-based (`sensor.*`) IDs to **external statistics** (`dominionsc:*`) to fix a recurring issue where large negative values appeared on the Energy Dashboard after restarts.
+>
+> **What to do:**
+> 1. Go to **Settings → Dashboards → Energy**
+> 2. Remove the existing Dominion consumption/cost entities from your grid configuration
+> 3. Re-add them by selecting the new external statistics (e.g. **"Dominion SC Electric"**, **"Dominion SC Gas"**, **"Dominion SC Electric Cost"**, **"Dominion SC Gas Cost"**)
+> 4. These appear under the "External statistics" section in the entity picker
+>
+> The new external statistics are not affected by HA's recorder auto-compilation and will not produce negative deltas after restarts.
+
 ## Important updates (2026-04-03)
 
 - Default SSL verification is now enabled. The integration will verify HTTPS certificates by default (the `verify_ssl` option defaults to `true` for new installs). If you previously disabled certificate verification, reconfigure the integration to re-enable it for that entry.
