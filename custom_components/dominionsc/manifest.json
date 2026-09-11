@@ -5,7 +5,7 @@
   "version": "2026.05.27.01",
   "config_flow": true,
   "iot_class": "cloud_polling",
-  "documentation": "https://github.com/kilo323/ha-dominionsc-energy",
+  "documentation": "https://github.com/kilo323/dominion-sc",
   "requirements": [
     "beautifulsoup4>=4.12.3"
   ],
