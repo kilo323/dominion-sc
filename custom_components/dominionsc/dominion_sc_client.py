@@ -64,8 +64,6 @@ class DominionSCClient:
         response = self._api_request(endpoint_key="account_listing")
         data = response.get("data", {})
         accounts = []
-        if data.get("singleAccount"):
-            return accounts
         for acct in data.get("accounts", []):
             accounts.append({
                 "account_number": acct.get("accountNumber", ""),
@@ -76,6 +74,14 @@ class DominionSCClient:
                 "has_ami_meter": acct.get("hasAMIMeter", False),
                 "sbu": acct.get("accountSbu", "")
             })
+            sbu = str(acct.get("accountSbu", "")).strip().upper()
+            if "ELECTRIC" in sbu:
+                self._service_types.add("ELECTRIC")
+            if "GAS" in sbu:
+                self._service_types.add("GAS")
+        # Preserve legacy behavior: single-account users get an empty list.
+        if data.get("singleAccount"):
+            return []
         return accounts
 
     def get_account_summary(self, account_number: str = None):
@@ -278,6 +284,10 @@ class DominionSCClient:
         self._2fa_token: Optional[str] = None
         self._username = None
         self._password = None
+        self._wc_session = None
+        self._bidgely_client: Optional[BidgelyClient] = None
+        # Service types detected from the account listing ("ELECTRIC" and/or "GAS").
+        self._service_types: set = set()
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -292,6 +302,18 @@ class DominionSCClient:
             api_base = self.API_BASE
         endpoint = self.ENDPOINTS.get(endpoint_key, endpoint_key)
         return urljoin(base_url, f"{api_base}{endpoint}")
+
+    def _resolve_bidgely_service_type(self) -> str:
+        """Pick the `service` code for the Bidgely SDKInit bootstrap.
+
+        Gas-only accounts reject service=E with HTTP 404 / error 6001, so the
+        service code must match the account's type. Detection is based on the
+        accountSbu values seen in GetAccountListing; when nothing conclusive is
+        found we default to "E" so existing electric users keep working.
+        """
+        if "GAS" in self._service_types and "ELECTRIC" not in self._service_types:
+            return "G"
+        return "E"
 
     def _get_timestamp(self) -> str:
         return str(int(time.time() * 1000))
@@ -689,7 +711,7 @@ class DominionSCClient:
         *,
         user_id: Optional[str] = None,
         home_id: int = 1,
-        measurement_type: str = "ELECTRIC",
+        measurement_type: Optional[str] = None,
         date_format: str = "MONTH_IN_WORDS_SPACE_DAY_COMMA_YEAR",
         locale: str = "en_US",
         round_values: bool = True,
@@ -697,6 +719,13 @@ class DominionSCClient:
         skip_if_completed_cycle: bool = True,
         compute_last_year: bool = False,
     ) -> JsonDict:
+        if measurement_type is None:
+            # Gas-only accounts have no electric projection data; resolve the
+            # measurement type from the service types detected at login.
+            if self._service_types == {"GAS"}:
+                measurement_type = "GAS"
+            else:
+                measurement_type = "ELECTRIC"
         bidgely = self._ensure_bidgely_ready()
         return bidgely.get_bill_projection(
             user_id=user_id,

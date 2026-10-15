@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone, date, time as dt_time
 from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
-from urllib.parse import urlparse
 
 import requests
+
+_LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     # Avoid a runtime import cycle: the dominion_sc_client module imports
@@ -185,40 +187,75 @@ class BidgelyClient:
         """
 
         """ Initialize client """
-        ret = self._dominion_client.get_account_listing()  # Ensure we're logged in and have cookies
-        ret = self._dominion_client.get_account_summary()  # Extra call to further ensure session is fully established
+        # Ensure we're logged in and have cookies; the listing also feeds
+        # the gas/electric service-type detection in the Dominion client.
+        self._dominion_client.get_account_listing()
+        self._dominion_client.get_account_summary()  # Extra call to further ensure session is fully established
 
-        """ Call SDKInit endpoint to get payload for wc-session """
-        url = self._dominion_client._get_api_url(base_url=self.BASE_URL, api_base=self.API_BASE, endpoint_key="sdkinit")
-        sdk_init = self._dominion_client._api_request(
-            endpoint_key="sdkinit",
-            method="GET",
-            params={
-                "service": "E",
-                "serviceAccountType": "R",
-            },
-            require_auth=True,
-            check_response_type=True,
-        )
+        # The `service` parameter must match the account's service type.
+        # Gas-only accounts (accountSbu "GAS") return HTTP 404 / error 6001
+        # when queried with service=E, so select the service code from the
+        # account listing's SBU values. Detection can be inconclusive (e.g.
+        # singleAccount responses without an accounts list), so on failure
+        # retry once with the opposite service type before giving up.
+        primary = self._dominion_client._resolve_bidgely_service_type()
+        service_candidates = [primary, "G" if primary == "E" else "E"]
 
-        sdk_data = sdk_init.get("data") if isinstance(sdk_init, dict) else sdk_init
-        client_id = sdk_data.get("client_id")
-        api_url = sdk_data.get("api_url")
-        payload = sdk_data.get("payload")
+        data = None
+        last_error: Optional[BidgelyClientError] = None
+        for attempt, service_type in enumerate(service_candidates):
+            _LOGGER.debug("Bidgely bootstrap attempt %d using service=%s", attempt + 1, service_type)
+            sdk_init = self._dominion_client._api_request(
+                endpoint_key="sdkinit",
+                method="GET",
+                params={
+                    "service": service_type,
+                    "serviceAccountType": "R",
+                },
+                require_auth=True,
+                check_response_type=True,
+            )
 
-        parsed_api = urlparse(api_url)
-        #wc_url = f"{parsed_api.scheme}://{parsed_api.netloc}{self._WC_SESSION}"
-        wc_path = self._WC_SESSION
-        wc_body = {
-            "clientId": client_id,
-            "encryptedData": payload,
-        }
+            sdk_data = sdk_init.get("data") if isinstance(sdk_init, dict) else sdk_init
+            client_id = sdk_data.get("client_id")
+            payload = sdk_data.get("payload")
 
-        data = self._request(
-            "POST",
-            wc_path,
-            json_body=wc_body,
-        )
+            wc_body = {
+                "clientId": client_id,
+                "encryptedData": payload,
+            }
+
+            try:
+                data = self._request(
+                    "POST",
+                    self._WC_SESSION,
+                    json_body=wc_body,
+                )
+                break
+            except BidgelyClientError as err:
+                last_error = err
+                if "prod_desc_widget" in (wc_body.get("clientId") or ""):
+                    continue
+
+            # The fusion SDKInit payload does not reliably include client_id
+            # for every account. Fall back to the clientId observed in the
+            # production HAR so the widget session can still be created.
+            fallback_body = {"clientId": "prod_desc_widget", "encryptedData": payload}
+            if fallback_body == wc_body:
+                continue
+            _LOGGER.debug("wc-session retrying with fallback clientId after failed bootstrap")
+            try:
+                data = self._request(
+                    "POST",
+                    self._WC_SESSION,
+                    json_body=fallback_body,
+                )
+                break
+            except BidgelyClientError as err:
+                last_error = err
+
+        if data is None:
+            raise last_error or BidgelyClientError("wc-session bootstrap failed")
 
         wrapper_payload = data.get("payload", {}) if isinstance(data, dict) else {}
         token_details = wrapper_payload.get("tokenDetails", {}) or {}
