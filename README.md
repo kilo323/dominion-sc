@@ -247,6 +247,26 @@ Then restart Home Assistant. Debug output covers:
 - Statistics sync (import counts, rewrite triggers, future-date filtering)
 - Future placeholder row skipping
 
+### Fusion daily-usage probe
+
+To check whether Dominion's Fusion API provides historical daily usage for an
+account, run the probe launcher from the repository root:
+
+- Windows PowerShell: `.\diagnostics\probe_fusion_daily_usage.ps1`
+- Linux/macOS: `bash diagnostics/probe_fusion_daily_usage.sh`
+
+The launcher prompts for Dominion credentials, creates a dedicated
+`.venv-fusion-probe` environment, and installs the probe's dependencies on
+first run. It then requests about two years of daily usage by default and
+prints only response dates, fuel flags, and record counts. It does not write
+credentials or raw usage values to disk. The account may request a 2FA code
+during login.
+
+Share only the printed summary. Do not share credentials, `.env`, cookies, or
+verification codes. Optional `--start-date YYYY-MM-DD` and `--end-date
+YYYY-MM-DD` arguments can be passed through the launcher to test a different
+period.
+
 ## Options (Reconfigurable)
 
 After setup, you can adjust options via **Settings → Devices & Services → Dominion SC Energy → Configure**:

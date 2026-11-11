@@ -17,6 +17,7 @@ __pycache__/
 .vscode/
 .idea/
 *.env
+.venv-fusion-probe/
 
 # whitelists
 !.env.example
