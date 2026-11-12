@@ -534,6 +534,40 @@ async def test_process_fusion_skips_non_gas_only(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_process_fusion_forced_mode_runs_on_non_gas_only(monkeypatch):
+    # The HACS options flow can force Fusion gas-only mode. When forced,
+    # _process_fusion must run even though the account reports a non-GAS
+    # service set (e.g. an electric account the user is testing in place of a
+    # genuine gas-only account).
+    coord = _make_fusion_coordinator(monkeypatch, FUSION_GAS_RECORDS, "fusion_forced")
+    coord._client._service_types = {"ELECTRIC"}
+    coord.config_entry.options[const.CONF_FORCE_FUSION_GAS_ONLY] = True
+
+    assert coord.is_force_fusion_gas_only is True
+    await coord._process_fusion()
+    assert coord.totals[const.TOTAL_GAS_FT3] > 0.0
+    assert coord.totals[const.TOTAL_GAS_COST] > 0.0
+
+
+@pytest.mark.asyncio
+async def test_process_fusion_forced_mode_still_filters_electric(monkeypatch):
+    # Even when forced, only gas (CCF) rows fold into the gas total; electric
+    # rows (KWH) are excluded, so a mixed account reports only gas usage.
+    records = [
+        {"read_date": "2026-10-28", "revenue_month": "202610", "usage": 100.0, "cost": 100.0, "consumption_type": "KWH"},
+        {"read_date": "2026-10-28", "revenue_month": "202610", "usage": 5.0, "cost": 18.0, "consumption_type": "CCF"},
+    ]
+    coord = _make_fusion_coordinator(monkeypatch, records, "fusion_forced_mixed")
+    coord._client._service_types = {"ELECTRIC", "GAS"}
+    coord.config_entry.options[const.CONF_FORCE_FUSION_GAS_ONLY] = True
+
+    await coord._process_fusion()
+    # Only the 5.0 therms gas row folds in; the 100 kWh row is ignored.
+    assert coord.totals[const.TOTAL_GAS_FT3] == 5.0
+    assert coord.totals[const.TOTAL_GAS_COST] == 18.0
+
+
+@pytest.mark.asyncio
 async def test_process_fusion_seeds_completed_and_current(monkeypatch):
     # Simulate a mid-month poll where the current cycle is only partly consumed.
     records = [

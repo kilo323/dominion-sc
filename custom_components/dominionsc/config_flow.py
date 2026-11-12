@@ -9,6 +9,8 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.helpers.selector import (
+    BooleanSelector,
+    BooleanSelectorConfig,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
@@ -17,6 +19,7 @@ from homeassistant.helpers.selector import (
 from .const import (
     CONF_BACKFILL_CYCLES_TARGET,
     CONF_DAILY_LOOKBACK_DAYS,
+    CONF_FORCE_FUSION_GAS_ONLY,
     CONF_PASSWORD,
     CONF_POLL_MINUTES,
     CONF_TFA_TOKEN,
@@ -24,6 +27,7 @@ from .const import (
     CONF_VERIFY_SSL,
     DEFAULT_BACKFILL_CYCLES_TARGET,
     DEFAULT_DAILY_LOOKBACK_DAYS,
+    DEFAULT_FORCE_FUSION_GAS_ONLY,
     DEFAULT_POLL_MINUTES,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
@@ -345,6 +349,21 @@ class DominionSCOptionsFlow(config_entries.OptionsFlow):
                         unit_of_measurement="days",
                     )
                 ),
+                vol.Optional(
+                    CONF_FORCE_FUSION_GAS_ONLY,
+                    description={
+                        "suggested_value": _get_current(
+                            CONF_FORCE_FUSION_GAS_ONLY,
+                            DEFAULT_FORCE_FUSION_GAS_ONLY,
+                        )
+                    },
+                    default=bool(
+                        _get_current(
+                            CONF_FORCE_FUSION_GAS_ONLY,
+                            DEFAULT_FORCE_FUSION_GAS_ONLY,
+                        )
+                    ),
+                ): BooleanSelector(BooleanSelectorConfig()),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

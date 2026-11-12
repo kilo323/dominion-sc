@@ -10,11 +10,16 @@ CONF_POLL_MINUTES = "poll_minutes"
 CONF_BACKFILL_CYCLES_TARGET = "backfill_cycles_target"
 CONF_DAILY_LOOKBACK_DAYS = "daily_lookback_days"
 CONF_TFA_TOKEN = "tfa_token"
+# Test-only toggle: force the coordinator down the Fusion monthly-total path
+# (as for a gas-only account) and skip Bidgely. Lives in the HACS options
+# flow; defaults to False so existing behavior is unchanged.
+CONF_FORCE_FUSION_GAS_ONLY = "force_fusion_gas_only"
 
 DEFAULT_VERIFY_SSL = True
 DEFAULT_POLL_MINUTES = 15
 DEFAULT_BACKFILL_CYCLES_TARGET = 6
 DEFAULT_DAILY_LOOKBACK_DAYS = 5
+DEFAULT_FORCE_FUSION_GAS_ONLY = False
 
 SERVICE_RUN_BACKFILL = "run_backfill"
 SERVICE_RUN_BACKFILL_ALL = "run_backfill_all"
