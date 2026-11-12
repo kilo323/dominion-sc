@@ -475,3 +475,121 @@ async def test_process_intervals_dedupe(monkeypatch):
         assert coord.bill_projection == {}
         assert coord.current_bill_summary == {}
         assert coord.current_daily_usage == {}
+
+# --- Fusion monthly-total reconciliation (gas-only accounts) ---
+
+# Records mirror the residentialUsageHistoryList shape returned by the Fusion
+# GetAllUsageData endpoint (read_date, revenue_month, usage in therms, cost).
+FUSION_GAS_RECORDS = [
+    {"read_date": "2026-10-28", "revenue_month": "202610", "usage": 8.0, "cost": 29.03},
+    {"read_date": "2026-09-29", "revenue_month": "202609", "usage": 9.0, "cost": 30.73},
+    {"read_date": "2026-08-27", "revenue_month": "202608", "usage": 5.0, "cost": 22.17},
+]
+
+
+def _make_fusion_coordinator(monkeypatch, records, entry_id="fusion"):
+    class FakeClient:
+        def __init__(self, verify_ssl=True):
+            self.tfa_token = None
+            self._service_types = {"GAS"}
+            self.records = list(records)
+
+        def login(self, username, password):
+            return None
+
+        def get_all_usage_data(self):
+            return {"records": self.records, "all_usage_history_data": [], "raw_data": {}}
+
+    monkeypatch.setattr(sc_coordinator, "DominionSCClient", FakeClient)
+
+    class HassStub:
+        async def async_add_executor_job(self, func, *args, **kwargs):
+            return func()
+
+    entry = DummyEntry(entry_id)
+    coord = sc_coordinator.DominionSCCoordinator(hass=None, entry=entry)
+    coord.hass = HassStub()
+    return coord
+
+
+def _fake_fusion(monkeypatch, records):
+    async def fake(coord, method):
+        return await method()
+
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_process_fusion_skips_non_gas_only(monkeypatch):
+    coord = _make_fusion_coordinator(monkeypatch, FUSION_GAS_RECORDS, "fusion_noelectric")
+    coord._client._service_types = {"ELECTRIC"}
+
+    await coord._process_fusion()
+    # No fusion records should have been applied to a gas-only-only guard.
+    assert coord.totals[const.TOTAL_GAS_FT3] == 0.0
+    assert coord.totals[const.TOTAL_GAS_COST] == 0.0
+    assert coord._state["fusion_current"]["read_date"] is None
+
+
+@pytest.mark.asyncio
+async def test_process_fusion_seeds_completed_and_current(monkeypatch):
+    # Simulate a mid-month poll where the current cycle is only partly consumed.
+    records = [
+        {"read_date": "2026-10-28", "revenue_month": "202610", "usage": 3.0, "cost": 12.5},  # current, partial
+        {"read_date": "2026-09-29", "revenue_month": "202609", "usage": 9.0, "cost": 30.73},  # completed
+    ]
+    coord = _make_fusion_coordinator(monkeypatch, records, "fusion_seed")
+
+    await coord._process_fusion()
+
+    # Completed cycle (Sept) fully added; current cycle (Oct) adds only its
+    # reported usage since there was no prior total.
+    assert coord.totals[const.TOTAL_GAS_FT3] == pytest.approx(12.0)
+    assert coord.totals[const.TOTAL_GAS_COST] == pytest.approx(43.23)
+    assert coord._state["fusion_current"]["read_date"] == "2026-10-28"
+
+
+@pytest.mark.asyncio
+async def test_process_fusion_growth_only_next_poll(monkeypatch):
+    # Poll 1: current cycle usage 3.0
+    coord = _make_fusion_coordinator(monkeypatch, [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 3.0, "cost": 12.5}], "fusion_grow")
+    await coord._process_fusion()
+    assert coord.totals[const.TOTAL_GAS_FT3] == 3.0
+
+    # Poll 2: current cycle usage grew to 5.0 -> only add the 2.0 delta.
+    # Mutate the records the existing (single) coordinator reads.
+    coord._client.records = [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 5.0, "cost": 18.0}]
+    await coord._process_fusion()
+    # Should have grown by 2.0, not reset or added 5.0 again.
+    assert coord.totals[const.TOTAL_GAS_FT3] == 5.0
+    assert coord._state["fusion_ledger"]["_current|usage"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_process_fusion_no_negative_on_usage_decline(monkeypatch):
+    coord = _make_fusion_coordinator(monkeypatch, [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 7.0, "cost": 20.0}], "fusion_decline")
+    await coord._process_fusion()
+    assert coord.totals[const.TOTAL_GAS_FT3] == 7.0
+
+    # Later poll reports a lower usage value; total must not decrease.
+    coord._client.records = [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 4.0, "cost": 10.0}]
+    await coord._process_fusion()
+    assert coord.totals[const.TOTAL_GAS_FT3] == 7.0  # clamped, no negative spike
+    assert coord.totals[const.TOTAL_GAS_COST] == 20.0
+
+
+@pytest.mark.asyncio
+async def test_process_fusion_rollover_becomes_current(monkeypatch):
+    coord = _make_fusion_coordinator(monkeypatch, [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 5.0, "cost": 18.0}], "fusion_roll")
+    await coord._process_fusion()
+
+    # New period closes and a fresh partial cycle appears.
+    coord._client.records = [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 5.0, "cost": 18.0}, {"read_date": "2026-11-28", "revenue_month": "202611", "usage": 2.0, "cost": 7.5}]
+    await coord._process_fusion()
+
+    # Prior cycle's 5.0 was fully added as completed; new cycle adds 2.0.
+    assert coord.totals[const.TOTAL_GAS_FT3] == 7.0
+    assert coord.totals[const.TOTAL_GAS_COST] == 25.5
+    assert coord._state["fusion_ledger"]["2026-10-28"] == 5.0
+    assert coord._state["fusion_current"]["read_date"] == "2026-11-28"
+

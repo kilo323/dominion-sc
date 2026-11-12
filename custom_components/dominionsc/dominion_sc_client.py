@@ -46,6 +46,7 @@ class DominionSCClient:
         
         # Billing
         "daily_usage": "/CommonBillingWebApi/GetAccountDailyUsageDetails/",
+        "all_usage_history": "/BillingWebApi/GetAllUsageData/",
         "ami_meter": "/CommonBillingWebApi/GetAccountAMIMeter/",
         "energy_analyzer_flag": "/BillingWebApi/GetAcctEnergyAnalyzerFlag/",
 
@@ -239,6 +240,70 @@ class DominionSCClient:
                 continue
             records.append(record)
         return records
+
+    def get_all_usage_data(self, account_number: str = None):
+        """
+        Get all historical usage data for the account from the Fusion API.
+
+        This endpoint returns one row per completed billing period plus the
+        current month-to-date period. Unlike ``GetAccountDailyUsageDetails`` it
+        works for gas-only accounts (which the Bidgely API does not support),
+        where it returns an empty ``data`` block.
+
+        Each row in ``residentialUsageHistoryList`` reports a single period with
+        its reading date, ``therms`` consumption and ``billItemAmount`` (the
+        period cost). For gas-only accounts ``therms`` is the gas consumption
+        (in therms); ``units`` is an electricity-equivalent value that must not
+        be summed with ``therms``.
+
+        Returns a dict with:
+        - ``records``: list of dicts with ``read_date`` (YYYY-MM-DD),
+          ``revenue_month``, ``usage`` and ``cost``.
+        - ``all_usage_history_data``: the raw API payload for diagnostics.
+        """
+        params = {}
+        if account_number:
+            params["accountNumber"] = account_number
+        params["revenueMonth"] = 0  # report the full history
+        response = self._api_request(endpoint_key="all_usage_history", params=params)
+        data = response.get("data") or {}
+        history = data.get("allUsageHistoryData") or []
+
+        records = []
+        # Prefer residential rate plan rows; fall back to the first list.
+        rows = None
+        for plan_list in (
+            "residentialUsageHistoryList",
+            "industrialUsageHistoryList",
+            "cigUsageHistoryList",
+        ):
+            rows = plan_list and (history[0].get(plan_list) if history else None)
+            if rows:
+                break
+
+        for row in rows or []:
+            read_date = (row.get("readDate") or "")[:10]
+            if not read_date:
+                continue
+            # For gas-only accounts ``therms`` holds the gas consumption and
+            # ``units`` is an electricity-equivalent (also in therms); the two
+            # must not be summed. The per-period cost is ``billItemAmount``.
+            consumption = float(row.get("therms") or 0.0)
+            cost = float(row.get("billItemAmount") or 0.0)
+            records.append(
+                {
+                    "read_date": read_date,
+                    "revenue_month": str(row.get("revenueMonthBilled", "")),
+                    "usage": consumption,
+                    "cost": cost,
+                }
+            )
+
+        return {
+            "records": records,
+            "all_usage_history_data": history,
+            "raw_data": data,
+        }
 
     def get_ami_meter(self, account_number: str = None):
         """

@@ -385,6 +385,11 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             await self._daily_reconcile(datetime.now().date())
             # Process at most one missing backfill cycle per scheduled update
             await self._process_backfill(overwrite=False)
+            # Gas-only accounts have no Bidgely data; reconcile the Fusion
+            # monthly totals so the running lifetime gas total accrues as usage
+            # comes in for the current cycle. Called after backfill so completed
+            # cycles are never re-applied.
+            await self._process_fusion()
             # One-time migration: clear auto-compiled recorder rows that
             # conflict with our imported statistics after state_class removal.
             force_rewrite = self._check_statistics_migration()
@@ -1076,7 +1081,113 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             len(backfill["missing_cycles"]),
         )
 
+    async def _process_fusion(self) -> None:
+        """Reconcile the Fusion monthly totals for gas-only accounts.
+
+        Gas-only accounts have no Bidgely data, so ``_process_intervals`` and
+        ``_daily_reconcile``/``_process_backfill`` contribute nothing. Fusion's
+        ``GetAllUsageData`` endpoint, however, reports one row per completed
+        billing period plus the current month-to-date period. This folds that
+        data into the existing lifetime totals:
+
+        - Each period (keyed by its fusion ``read_date``) is counted exactly
+          once via ``fusion_ledger``.
+        - The current (ongoing) cycle is the last read-date; only the
+          growth since the previous reading is added each poll, so the running
+          gas total accrues as usage comes in for the month.
+        - No reset occurs: the running lifetime total only moves up, so there is
+          never a negative spike against the ``TOTAL_INCREASING`` sensors.
+
+        Only gas-only accounts reach this path (the electric/billing paths go
+        through Bidgely and populate ``totals`` directly). Any value that would
+        move a total downward is ignored via the monotonic guard.
+        """
+        # Skip entirely for accounts that are not gas-only: those fetch usage
+        # through Bidgely. Guard matches get_bill_projection so we only hit the
+        # extra Fusion endpoint when it is actually needed.
+        if self._client._service_types != {"GAS"}:
+            return
+
+        try:
+            fusion = await self.hass.async_add_executor_job(self._client.get_all_usage_data)
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.debug("Fusion monthly totals unavailable: %s", err)
+            return
+
+        records = fusion.get("records") or []
+        if not records:
+            return
+
+        # Fusion returns the current cycle first, then completed cycles
+        # (newest to oldest). Sort ascending so completed cycles seed first and
+        # the current cycle is reconciled last.
+        records = sorted(records, key=lambda r: r["read_date"])
+        current = records[-1]
+        completed = records[:-1]
+
+        ledger = self._state["fusion_ledger"]
+        added_usage = 0.0
+        added_cost = 0.0
+
+        prev_read = self._state["fusion_current"].get("read_date")
+        # When the current cycle's read_date moves on (a new period closed),
+        # the previously tracked current cycle has already been folded into
+        # totals via the per-poll delta logic below. Promote its read_date into
+        # the completed ledger *without* adding to totals again, so the loop
+        # below skips it instead of double-counting.
+        if prev_read and current["read_date"] != prev_read:
+            ledger[prev_read] = float(ledger.get("_current|usage", 0.0))
+            ledger[f"{prev_read}|cost"] = float(ledger.get("_current|cost", 0.0))
+            ledger.pop("_current|usage", None)
+            ledger.pop("_current|cost", None)
+
+        for record in completed:
+            read_date = record["read_date"]
+            if read_date in ledger:
+                continue
+            usage = max(float(record["usage"]), 0.0)
+            cost = max(float(record["cost"]), 0.0)
+            if usage:
+                ledger[read_date] = usage
+                self._state["totals"][TOTAL_GAS_FT3] += usage
+                added_usage += usage
+            if cost:
+                ledger[f"{read_date}|cost"] = cost
+                self._state["totals"][TOTAL_GAS_COST] += cost
+                added_cost += cost
+
+        # Reconcile the current cycle by its delta from the previous reading.
+        # Usage and cost are tracked separately: only usage feeds the gas
+        # volume total, only cost feeds the gas cost total.
+        cur_usage = max(float(current["usage"]), 0.0)
+        cur_cost = max(float(current["cost"]), 0.0)
+        prev_usage = float(ledger.get("_current|usage", 0.0))
+        delta_usage = max(cur_usage - prev_usage, 0.0)
+        if delta_usage:
+            ledger["_current|usage"] = cur_usage
+            self._state["totals"][TOTAL_GAS_FT3] += delta_usage
+            added_usage += delta_usage
+        if cur_cost > 0:
+            delta_cost = max(cur_cost - float(ledger.get("_current|cost", 0.0)), 0.0)
+            if delta_cost:
+                ledger["_current|cost"] = cur_cost
+                self._state["totals"][TOTAL_GAS_COST] += delta_cost
+                added_cost += delta_cost
+
+        self._state["fusion_current"] = {
+            "read_date": current.get("read_date"),
+            "revenue_month": current.get("revenue_month"),
+            "usage_th": cur_usage,
+            "cost": cur_cost,
+        }
+        if added_usage or added_cost:
+            _LOGGER.info(
+                "Fusion gas totals applied: usage_th=%.1f cost=$%.2f (current cycle read_date=%s)",
+                added_usage, added_cost, current.get("read_date"),
+            )
+
     async def _fetch_daily_rows(self, start: date, end: date) -> list[dict[str, float | str]]:
+        """Fetch daily usage rows via Bidgely, merging electric and gas."""
         start_dt = datetime.combine(start, time.min, tzinfo=UTC)
         end_dt = datetime.combine(end, time.max, tzinfo=UTC)
         # If the requested end date is in the past (strictly before today) we
@@ -1407,6 +1518,15 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             },
             # ISO 8601 timestamp of the last successful sync/update
             "last_sync": None,
+            # Fusion monthly totals for the current billing cycle (gas-only
+            # accounts, which have no Bidgely data). Tracks the last applied
+            # cycle's running totals so the delta for the current cycle can be
+            # computed without re-adding completed periods.
+            "fusion_current": {"read_date": None, "revenue_month": None, "usage_th": 0.0, "cost": 0.0},
+            # Per-period ledger keyed by fusion read_date so each completed gas
+            # period is counted exactly once and the ongoing current cycle's
+            # growth is reconciled by delta.
+            "fusion_ledger": {},
             "statistics_rewrite_once_done": False,
             # Latest fetched account/billing payloads (for informational sensors)
             "account_summary": {},
@@ -1468,6 +1588,18 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             except Exception:
                 continue
 
+        # Gas-only accounts have no daily/interval ledgers, so fold the Fusion
+        # monthly totals in here. Each completed fusion period is keyed by its
+        # read_date and the current cycle is tracked under `_current|*` keys.
+        # Without this the persisted gas totals would be zeroed on every
+        # restart. The monotonic guard below keeps everything cumulative.
+        fusion_ledger = self._state.get("fusion_ledger", {}) or {}
+        for key, val in fusion_ledger.items():
+            if key == "_current|usage":
+                totals[TOTAL_GAS_FT3] += float(val or 0.0)
+            elif key == "_current|cost":
+                totals[TOTAL_GAS_COST] += float(val or 0.0)
+
         # Respect monotonicity vs any recorded last_totals
         last = self._state.get("last_totals", {}) or {}
         for k in list(totals.keys()):
@@ -1480,7 +1612,7 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
     def _merge_state(self, stored: dict[str, Any]) -> dict[str, Any]:
         merged = self._default_state()
         for key, value in stored.items():
-            if key in {"interval_ledger", "interval_cost_ledger", "daily_ledger", "daily_cost_ledger", "totals", "last_totals", "stats", "backfill", "statistics_import"} and isinstance(value, dict):
+            if key in {"interval_ledger", "interval_cost_ledger", "daily_ledger", "daily_cost_ledger", "totals", "last_totals", "stats", "backfill", "statistics_import", "fusion_ledger"} and isinstance(value, dict):
                 merged[key].update(value)
             else:
                 merged[key] = value
