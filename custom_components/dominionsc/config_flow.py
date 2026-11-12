@@ -31,6 +31,7 @@ from .const import (
     DEFAULT_POLL_MINUTES,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
+    read_force_fusion_gas_only_from_env,
 )
 from .dominion_sc_client import DominionSCClient
 
@@ -57,6 +58,10 @@ class DominionSCConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._selected_tfa_option = None
         self._is_reconfigure = False
         self._reconfig_entry = None
+        # Set from the environment (DOMINION_SC_FORCE_FUSION_GAS_ONLY) so a fresh
+        # install can seed the force-fusion-gas-only flag into the entry and
+        # validate that path during first sync.
+        self._force_fusion_gas_only = read_force_fusion_gas_only_from_env()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
@@ -266,7 +271,20 @@ class DominionSCConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return await self.async_step_user(user_input)
 
     async def _async_finish(self):
-        """Create or update the config entry after successful auth."""
+        """Create or update the config entry after successful auth.
+
+        Seeds ``force_fusion_gas_only`` into the entry's ``data`` so a fresh
+        install can run the coordinator's Fusion gas-only path during first
+        sync. The flag is read from ``DOMINION_SC_FORCE_FUSION_GAS_ONLY`` and
+        is persisted on the entry; the coordinator prefers an explicit options
+        value over ``data`` when reading, so HACS options always win.
+        """
+        entry_data = {**self._user_data, CONF_FORCE_FUSION_GAS_ONLY: self._force_fusion_gas_only}
+        if self._force_fusion_gas_only:
+            _LOGGER.warning(
+                "Fusion gas-only test mode enabled for this entry; "
+                "Bidgely data will be skipped during sync."
+            )
         if self._is_reconfigure and self._reconfig_entry:
             _LOGGER.debug(
                 "Reconfigure: updating entry %s",
@@ -274,11 +292,11 @@ class DominionSCConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
             return self.async_update_reload_and_abort(
                 self._reconfig_entry,
-                data=self._user_data,
+                data=entry_data,
             )
 
         # New entry
-        return self.async_create_entry(title="Dominion SC Energy", data=self._user_data)
+        return self.async_create_entry(title="Dominion SC Energy", data=entry_data)
 
 
 class DominionSCOptionsFlow(config_entries.OptionsFlow):

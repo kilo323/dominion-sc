@@ -1,4 +1,6 @@
 """Constants for Dominion SC Energy integration."""
+import os
+
 DOMAIN = "dominionsc"
 
 PLATFORMS = ["sensor", "button"]
@@ -20,6 +22,34 @@ DEFAULT_POLL_MINUTES = 15
 DEFAULT_BACKFILL_CYCLES_TARGET = 6
 DEFAULT_DAILY_LOOKBACK_DAYS = 5
 DEFAULT_FORCE_FUSION_GAS_ONLY = False
+
+# Environment variable name used to seed the force flag into a freshly
+# created entry so a fresh install can validate the gas-only Fusion path
+# during first sync.
+ENV_FORCE_FUSION_GAS_ONLY = "DOMINION_SC_FORCE_FUSION_GAS_ONLY"
+
+# Recognized truthy values for ENV_FORCE_FUSION_GAS_ONLY (case-insensitive).
+_FORCE_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def read_force_fusion_gas_only_from_env(
+    env: "dict[str, str] | None" = None,
+) -> bool:
+    """Whether the force-fusion-gas-only flag is set via the environment.
+
+    Reads ``DOMINION_SC_FORCE_FUSION_GAS_ONLY`` from ``env`` (defaults to
+    ``os.environ``). Recognized truthy values are, case-insensitively,
+    ``1``, ``true``, ``yes`` and ``on``; anything else, including a missing
+    variable, is ``False``.
+
+    This lets a fresh install seed the flag into the entry's ``data`` before
+    first sync, so the coordinator's Fusion-only path is exercised during
+    setup without editing HACS options. Because it reads a plain env var it
+    never leaks into a published integration and has no effect on existing
+    users. ``env`` is injectable for testing.
+    """
+    env = env if env is not None else os.environ
+    return env.get(ENV_FORCE_FUSION_GAS_ONLY, "").strip().lower() in _FORCE_TRUTHY
 
 SERVICE_RUN_BACKFILL = "run_backfill"
 SERVICE_RUN_BACKFILL_ALL = "run_backfill_all"

@@ -549,6 +549,19 @@ async def test_process_fusion_forced_mode_runs_on_non_gas_only(monkeypatch):
     assert coord.totals[const.TOTAL_GAS_COST] > 0.0
 
 
+def test_read_force_fusion_gas_only_from_env(monkeypatch):
+    # Truthy values, case-insensitive.
+    for val in ("1", "true", "yes", "on", "TRUE", "On"):
+        assert const.read_force_fusion_gas_only_from_env({const.ENV_FORCE_FUSION_GAS_ONLY: val}) is True
+    # Missing / falsy values are False.
+    assert const.read_force_fusion_gas_only_from_env({}) is False
+    assert const.read_force_fusion_gas_only_from_env({const.ENV_FORCE_FUSION_GAS_ONLY: "0"}) is False
+    assert const.read_force_fusion_gas_only_from_env({const.ENV_FORCE_FUSION_GAS_ONLY: "off"}) is False
+    assert const.read_force_fusion_gas_only_from_env({const.ENV_FORCE_FUSION_GAS_ONLY: "  1 "}) is True
+    # A missing variable never leaks truthy results.
+    assert const.read_force_fusion_gas_only_from_env(None) is False
+
+
 @pytest.mark.asyncio
 async def test_process_fusion_forced_mode_still_filters_electric(monkeypatch):
     # Even when forced, only gas (CCF) rows fold into the gas total; electric
