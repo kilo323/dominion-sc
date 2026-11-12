@@ -267,6 +267,33 @@ verification codes. Optional `--start-date YYYY-MM-DD` and `--end-date
 YYYY-MM-DD` arguments can be passed through the launcher to test a different
 period.
 
+### Fusion-only gas-only validation path
+
+Gas-only accounts return HTTP 404 from Bidgely, so this integration can
+optionally skip Bidgely entirely and read historical gas usage straight from
+Dominion's Fusion endpoint (`GetAllUsageData`). There is **no toggle in the
+Home Assistant options**; the path is controlled by a single environment
+variable, `DOMINIONSC_FORCE_FUSION_GAS_ONLY`, read live by the integration on
+every poll — set it to a truthy value (case-insensitive `1/true/yes/on`) and
+restart Home Assistant. Clear it (`0/false/off` or unset) and restart again to
+restore normal Bidgely behavior; no option editing is required.
+
+In this mode the integration reconciles Fusion's monthly gas totals into the
+existing gas sensors (folding the current month into the running total), so no
+sensor resets occur. Manual backfill and statistics-rewrite services are
+disabled while the flag is set, because those fetch historical daily rows from
+Bidgely, which does not exist for gas-only accounts. This path is for testing
+the gas-only Fusion behavior and has no effect on normal production Bidgely
+accounts.
+
+Set it for a Home Assistant container in `docker-compose.yml` (the same
+variable is also shown, commented out, in `.env.example`):
+
+```yaml
+environment:
+  # - DOMINIONSC_FORCE_FUSION_GAS_ONLY=true
+```
+
 ## Options (Reconfigurable)
 
 After setup, you can adjust options via **Settings → Devices & Services → Dominion SC Energy → Configure**:

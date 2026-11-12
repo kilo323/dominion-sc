@@ -6,6 +6,10 @@ services:
       - PUID=1000
       - PGID=1000
       - TZ=America/New_York
+      # Integration reads DOMINIONSC_FORCE_FUSION_GAS_ONLY live on every poll.
+      # Leave unset (or set to 0/false/off) for normal Bidgely behavior.
+      # Set to "true" to validate the Fusion-only gas-only path on first sync.
+      # - DOMINIONSC_FORCE_FUSION_GAS_ONLY=false
     volumes:
       - ./ha_config:/config
       - ./custom_components/dominionsc:/config/custom_components/dominionsc
