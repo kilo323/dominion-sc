@@ -1101,6 +1101,10 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         Only gas-only accounts reach this path (the electric/billing paths go
         through Bidgely and populate ``totals`` directly). Any value that would
         move a total downward is ignored via the monotonic guard.
+
+        A mixed (gas + electric) account reports electric rows alongside the
+        gas ones; only the gas (``consumption_type=CCF``) rows fold into the
+        gas totals here, so electric usage never leaks into ``TOTAL_GAS_FT3``.
         """
         # Skip entirely for accounts that are not gas-only: those fetch usage
         # through Bidgely. Guard matches get_bill_projection so we only hit the
@@ -1115,8 +1119,14 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             return
 
         records = fusion.get("records") or []
-        if not records:
+        # Only gas (CCF) rows feed the gas volume/cost totals. A mixed account
+        # reports electric rows too (``consumptionType=KWH``); folding their
+        # usage into TOTAL_GAS_FT3 would overstate gas consumption. The parser
+        # tags each record with its ``consumption_type`` for exactly this filter.
+        gas_records = [r for r in records if r.get("consumption_type") == "CCF"]
+        if not gas_records:
             return
+        records = gas_records
 
         # Fusion returns the current cycle first, then completed cycles
         # (newest to oldest). Sort ascending so completed cycles seed first and

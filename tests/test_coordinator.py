@@ -480,10 +480,12 @@ async def test_process_intervals_dedupe(monkeypatch):
 
 # Records mirror the residentialUsageHistoryList shape returned by the Fusion
 # GetAllUsageData endpoint (read_date, revenue_month, usage in therms, cost).
+# ``consumption_type`` is "CCF" for gas rows and "KWH" for electric rows; the
+# coordinator folds only CCF (gas) rows into the gas totals.
 FUSION_GAS_RECORDS = [
-    {"read_date": "2026-10-28", "revenue_month": "202610", "usage": 8.0, "cost": 29.03},
-    {"read_date": "2026-09-29", "revenue_month": "202609", "usage": 9.0, "cost": 30.73},
-    {"read_date": "2026-08-27", "revenue_month": "202608", "usage": 5.0, "cost": 22.17},
+    {"read_date": "2026-10-28", "revenue_month": "202610", "usage": 8.0, "cost": 29.03, "consumption_type": "CCF"},
+    {"read_date": "2026-09-29", "revenue_month": "202609", "usage": 9.0, "cost": 30.73, "consumption_type": "CCF"},
+    {"read_date": "2026-08-27", "revenue_month": "202608", "usage": 5.0, "cost": 22.17, "consumption_type": "CCF"},
 ]
 
 
@@ -535,8 +537,8 @@ async def test_process_fusion_skips_non_gas_only(monkeypatch):
 async def test_process_fusion_seeds_completed_and_current(monkeypatch):
     # Simulate a mid-month poll where the current cycle is only partly consumed.
     records = [
-        {"read_date": "2026-10-28", "revenue_month": "202610", "usage": 3.0, "cost": 12.5},  # current, partial
-        {"read_date": "2026-09-29", "revenue_month": "202609", "usage": 9.0, "cost": 30.73},  # completed
+        {"read_date": "2026-10-28", "revenue_month": "202610", "usage": 3.0, "cost": 12.5, "consumption_type": "CCF"},  # current, partial
+        {"read_date": "2026-09-29", "revenue_month": "202609", "usage": 9.0, "cost": 30.73, "consumption_type": "CCF"},  # completed
     ]
     coord = _make_fusion_coordinator(monkeypatch, records, "fusion_seed")
 
@@ -552,13 +554,13 @@ async def test_process_fusion_seeds_completed_and_current(monkeypatch):
 @pytest.mark.asyncio
 async def test_process_fusion_growth_only_next_poll(monkeypatch):
     # Poll 1: current cycle usage 3.0
-    coord = _make_fusion_coordinator(monkeypatch, [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 3.0, "cost": 12.5}], "fusion_grow")
+    coord = _make_fusion_coordinator(monkeypatch, [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 3.0, "cost": 12.5, "consumption_type": "CCF"}], "fusion_grow")
     await coord._process_fusion()
     assert coord.totals[const.TOTAL_GAS_FT3] == 3.0
 
     # Poll 2: current cycle usage grew to 5.0 -> only add the 2.0 delta.
     # Mutate the records the existing (single) coordinator reads.
-    coord._client.records = [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 5.0, "cost": 18.0}]
+    coord._client.records = [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 5.0, "cost": 18.0, "consumption_type": "CCF"}]
     await coord._process_fusion()
     # Should have grown by 2.0, not reset or added 5.0 again.
     assert coord.totals[const.TOTAL_GAS_FT3] == 5.0
@@ -567,12 +569,12 @@ async def test_process_fusion_growth_only_next_poll(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_process_fusion_no_negative_on_usage_decline(monkeypatch):
-    coord = _make_fusion_coordinator(monkeypatch, [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 7.0, "cost": 20.0}], "fusion_decline")
+    coord = _make_fusion_coordinator(monkeypatch, [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 7.0, "cost": 20.0, "consumption_type": "CCF"}], "fusion_decline")
     await coord._process_fusion()
     assert coord.totals[const.TOTAL_GAS_FT3] == 7.0
 
     # Later poll reports a lower usage value; total must not decrease.
-    coord._client.records = [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 4.0, "cost": 10.0}]
+    coord._client.records = [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 4.0, "cost": 10.0, "consumption_type": "CCF"}]
     await coord._process_fusion()
     assert coord.totals[const.TOTAL_GAS_FT3] == 7.0  # clamped, no negative spike
     assert coord.totals[const.TOTAL_GAS_COST] == 20.0
@@ -580,11 +582,11 @@ async def test_process_fusion_no_negative_on_usage_decline(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_process_fusion_rollover_becomes_current(monkeypatch):
-    coord = _make_fusion_coordinator(monkeypatch, [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 5.0, "cost": 18.0}], "fusion_roll")
+    coord = _make_fusion_coordinator(monkeypatch, [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 5.0, "cost": 18.0, "consumption_type": "CCF"}], "fusion_roll")
     await coord._process_fusion()
 
     # New period closes and a fresh partial cycle appears.
-    coord._client.records = [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 5.0, "cost": 18.0}, {"read_date": "2026-11-28", "revenue_month": "202611", "usage": 2.0, "cost": 7.5}]
+    coord._client.records = [{"read_date": "2026-10-28", "revenue_month": "202610", "usage": 5.0, "cost": 18.0, "consumption_type": "CCF"}, {"read_date": "2026-11-28", "revenue_month": "202611", "usage": 2.0, "cost": 7.5, "consumption_type": "CCF"}]
     await coord._process_fusion()
 
     # Prior cycle's 5.0 was fully added as completed; new cycle adds 2.0.
@@ -592,4 +594,35 @@ async def test_process_fusion_rollover_becomes_current(monkeypatch):
     assert coord.totals[const.TOTAL_GAS_COST] == 25.5
     assert coord._state["fusion_ledger"]["2026-10-28"] == 5.0
     assert coord._state["fusion_current"]["read_date"] == "2026-11-28"
+
+
+@pytest.mark.asyncio
+async def test_process_fusion_ignores_electric_rows(monkeypatch):
+    # A mixed account reports electric rows (``consumption_type=KWH``) alongside
+    # gas rows (``consumption_type=CCF``). Only the gas rows may fold into the
+    # gas totals; the electric rows must be ignored. This is the regression
+    # case for the ``usage=0.00`` bug, where the old parser summed ``therms``
+    # (always 0 for electric rows) for the whole payload.
+    records = [
+        {"read_date": "2026-11-28", "revenue_month": "202611", "usage": 999.0, "cost": 350.0, "consumption_type": "KWH"},
+        {"read_date": "2026-11-28", "revenue_month": "202611", "usage": 15.0, "cost": 51.11, "consumption_type": "CCF"},
+    ]
+    coord = _make_fusion_coordinator(monkeypatch, records, "fusion_mixed")
+    await coord._process_fusion()
+    assert coord.totals[const.TOTAL_GAS_FT3] == pytest.approx(15.0)
+    assert coord.totals[const.TOTAL_GAS_COST] == pytest.approx(51.11)
+
+
+@pytest.mark.asyncio
+async def test_process_fusion_non_ccf_records_are_a_noop(monkeypatch):
+    # If every record is non-gas (or there are none), fusion must contribute
+    # nothing rather than zeroing the totals or raising.
+    coord = _make_fusion_coordinator(
+        monkeypatch,
+        [{"read_date": "2026-11-28", "revenue_month": "202611", "usage": 9.0, "cost": 3.0, "consumption_type": "KWH"}],
+        "fusion_electric",
+    )
+    await coord._process_fusion()
+    assert coord.totals[const.TOTAL_GAS_FT3] == 0.0
+    assert coord.totals[const.TOTAL_GAS_COST] == 0.0
 

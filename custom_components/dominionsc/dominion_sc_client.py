@@ -251,14 +251,19 @@ class DominionSCClient:
         where it returns an empty ``data`` block.
 
         Each row in ``residentialUsageHistoryList`` reports a single period with
-        its reading date, ``therms`` consumption and ``billItemAmount`` (the
-        period cost). For gas-only accounts ``therms`` is the gas consumption
-        (in therms); ``units`` is an electricity-equivalent value that must not
-        be summed with ``therms``.
+        its reading date, ``billItemAmount`` (the period cost) and
+        ``consumptionType``. Consumption units differ per service: gas rows
+        (``consumptionType=CCF``) report usage in ``therms`` while electric rows
+        (``consumptionType=KWH``) report it in ``units`` (kWh). The parser maps
+        each row to the correct field so the two are never summed together, and
+        every period is scanned (a mixed account has one electric and one gas
+        period in the payload) so gas-only totals are populated correctly.
 
         Returns a dict with:
         - ``records``: list of dicts with ``read_date`` (YYYY-MM-DD),
-          ``revenue_month``, ``usage`` and ``cost``.
+          ``revenue_month``, ``usage``, ``cost`` and ``consumption_type``
+          (``"CCF"`` for gas, ``"KWH"`` for electric). The coordinator uses
+          ``consumption_type`` to fold only gas rows into the gas totals.
         - ``all_usage_history_data``: the raw API payload for diagnostics.
         """
         params = {}
@@ -270,34 +275,48 @@ class DominionSCClient:
         history = data.get("allUsageHistoryData") or []
 
         records = []
-        # Prefer residential rate plan rows; fall back to the first list.
-        rows = None
-        for plan_list in (
-            "residentialUsageHistoryList",
-            "industrialUsageHistoryList",
-            "cigUsageHistoryList",
-        ):
-            rows = plan_list and (history[0].get(plan_list) if history else None)
-            if rows:
-                break
+        # The payload nests one rate plan per period in ``allUsageHistoryData``.
+        # A single account may carry both electric (``utilityType=E``) and gas
+        # (``utilityType=G``) plans, so every period must be scanned -- not just
+        # the first -- or gas periods are silently dropped and usage resolves to
+        # zero for the electric plan (whose rows report ``therms`` as 0).
+        for period in history:
+            rows = None
+            # Prefer residential rate plan rows; fall back to any present list.
+            for plan_list in (
+                "residentialUsageHistoryList",
+                "industrialUsageHistoryList",
+                "cigUsageHistoryList",
+            ):
+                candidate = period.get(plan_list)
+                if candidate:
+                    rows = candidate
+                    break
 
-        for row in rows or []:
-            read_date = (row.get("readDate") or "")[:10]
-            if not read_date:
-                continue
-            # For gas-only accounts ``therms`` holds the gas consumption and
-            # ``units`` is an electricity-equivalent (also in therms); the two
-            # must not be summed. The per-period cost is ``billItemAmount``.
-            consumption = float(row.get("therms") or 0.0)
-            cost = float(row.get("billItemAmount") or 0.0)
-            records.append(
-                {
-                    "read_date": read_date,
-                    "revenue_month": str(row.get("revenueMonthBilled", "")),
-                    "usage": consumption,
-                    "cost": cost,
-                }
-            )
+            for row in rows or []:
+                read_date = (row.get("readDate") or "")[:10]
+                if not read_date:
+                    continue
+                # Fusion reports consumption in different units per service:
+                #   - gas rows  (``consumptionType=CCF``) use ``therms``
+                #   - electric rows (``consumptionType=KWH``) use ``units`` (kWh)
+                # The per-period cost is ``billItemAmount``. The two units must
+                # never be summed into one total.
+                consumption_type = row.get("consumptionType")
+                if consumption_type == "CCF":
+                    consumption = float(row.get("therms") or 0.0)
+                else:
+                    consumption = float(row.get("units") or 0.0)
+                cost = float(row.get("billItemAmount") or 0.0)
+                records.append(
+                    {
+                        "read_date": read_date,
+                        "revenue_month": str(row.get("revenueMonthBilled", "")),
+                        "usage": consumption,
+                        "cost": cost,
+                        "consumption_type": consumption_type,
+                    }
+                )
 
         return {
             "records": records,
