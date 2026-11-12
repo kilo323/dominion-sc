@@ -179,6 +179,62 @@ async def test_process_backfill_applies_rows(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_process_backfill_skipped_when_forced_fusion(monkeypatch):
+    # Forced (env-var) gas-only accounts have no Bidgely data: backfill must
+    # never fetch historical rows from Bidgely. Regression guard for the case
+    # where the manual services/buttons reached the Bidgely path even in
+    # forced mode.
+    entry = DummyEntry("e3f")
+    coord = sc_coordinator.DominionSCCoordinator(hass=None, entry=entry)
+    coord._state["backfill"]["missing_cycles"] = ["2026-01-01|2026-01-03"]
+
+    monkeypatch.setenv(const.ENV_FORCE_FUSION_GAS_ONLY, "true")
+    assert coord.is_force_fusion_gas_only is True
+
+    fetched = {"count": 0}
+
+    async def asserting_fetch(start, end):
+        # This must never run in forced mode; raise loudly if it does.
+        fetched["count"] += 1
+        raise AssertionError("Bidgely _fetch_daily_rows called in forced mode")
+
+    monkeypatch.setattr(coord, "_fetch_daily_rows", asserting_fetch)
+
+    # Manual service path (allow_initialize_missing=False) must skip.
+    await coord._process_backfill(overwrite=False, cycle_key=None, allow_initialize_missing=False)
+    # Even with initialize allowed, still skipped before any fetch.
+    await coord._process_backfill(overwrite=True, cycle_key=None, allow_initialize_missing=True)
+
+    # No cycles were touched: none completed, none removed from missing.
+    assert fetched["count"] == 0
+    assert coord._state["backfill"]["cycles_completed"] == 0
+    assert coord._state["backfill"]["completed_cycles"] == []
+
+
+@pytest.mark.asyncio
+async def test_async_run_backfill_all_skipped_when_forced_fusion(monkeypatch):
+    # async_run_backfill_all must also short-circuit in forced mode so the
+    # manual "run all" button/service never reaches Bidgely.
+    entry = DummyEntry("e3a")
+    coord = sc_coordinator.DominionSCCoordinator(hass=None, entry=entry)
+    coord._state["backfill"]["missing_cycles"] = ["2026-01-01|2026-01-02"]
+
+    monkeypatch.setenv(const.ENV_FORCE_FUSION_GAS_ONLY, "true")
+
+    async def asserting_fetch(start, end):
+        raise AssertionError("Bidgely _fetch_daily_rows called in forced mode")
+
+    monkeypatch.setattr(coord, "_fetch_daily_rows", asserting_fetch)
+
+    await coord.async_run_backfill_all(overwrite=False)
+
+    # Nothing was processed or completed.
+    assert coord._state["backfill"]["cycles_completed"] == 0
+    assert coord._state["backfill"]["missing_cycles"] == ["2026-01-01|2026-01-02"]
+    assert coord._state["backfill"]["completed_cycles"] == []
+
+
+@pytest.mark.asyncio
 async def test_async_run_backfill_all_processes_all_missing(monkeypatch):
     entry = DummyEntry("e6")
     coord = sc_coordinator.DominionSCCoordinator(hass=None, entry=entry)

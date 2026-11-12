@@ -284,6 +284,13 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             overwrite,
             cycle_key,
         )
+        # Forced (env-var) gas-only accounts have no Bidgely data, so skip
+        # authentication and the whole backfill cycle outright.
+        if self.is_force_fusion_gas_only:
+            _LOGGER.debug(
+                "Manual backfill skipped: forced Fusion gas-only mode (no Bidgely data)"
+            )
+            return
         await self._ensure_authenticated()
         # When triggered manually via the service/button, callers may choose
         # whether to allow repopulating missing cycles. Pass the flag through
@@ -306,7 +313,13 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             self.config_entry.entry_id,
             overwrite,
         )
-        await self._ensure_authenticated()
+        # Forced (env-var) gas-only accounts have no Bidgely data, so skip
+        # authentication and the whole backfill cycle outright.
+        if self.is_force_fusion_gas_only:
+            _LOGGER.debug(
+                "Manual full backfill skipped: forced Fusion gas-only mode (no Bidgely data)"
+            )
+            return
 
         if not self._state["backfill"].get("missing_cycles"):
             self._initialize_backfill_cycles()
@@ -1029,6 +1042,15 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         allow_initialize_missing=False so they can early-exit when there are no
         incomplete cycles to process.
         """
+        # Forced (env-var) gas-only accounts have no Bidgely data, so backfill
+        # must never run — it would otherwise fetch historical rows from
+        # Bidgely, the very path the flag is meant to skip. This guard sits at
+        # the top of every caller (scheduled and manual services/buttons), so
+        # the Bidgely-free contract holds everywhere without duplication.
+        if self.is_force_fusion_gas_only:
+            _LOGGER.debug("Backfill skipped: forced Fusion gas-only mode (no Bidgely data)")
+            return
+
         if allow_initialize_missing:
             self._initialize_backfill_cycles()
         else:
