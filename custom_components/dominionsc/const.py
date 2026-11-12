@@ -1,5 +1,6 @@
 """Constants for Dominion SC Energy integration."""
 import os
+from typing import Mapping
 
 DOMAIN = "dominionsc"
 
@@ -12,20 +13,16 @@ CONF_POLL_MINUTES = "poll_minutes"
 CONF_BACKFILL_CYCLES_TARGET = "backfill_cycles_target"
 CONF_DAILY_LOOKBACK_DAYS = "daily_lookback_days"
 CONF_TFA_TOKEN = "tfa_token"
-# Test-only toggle: force the coordinator down the Fusion monthly-total path
-# (as for a gas-only account) and skip Bidgely. Lives in the HACS options
-# flow; defaults to False so existing behavior is unchanged.
-CONF_FORCE_FUSION_GAS_ONLY = "force_fusion_gas_only"
 
 DEFAULT_VERIFY_SSL = True
 DEFAULT_POLL_MINUTES = 15
 DEFAULT_BACKFILL_CYCLES_TARGET = 6
 DEFAULT_DAILY_LOOKBACK_DAYS = 5
-DEFAULT_FORCE_FUSION_GAS_ONLY = False
 
-# Environment variable name used to seed the force flag into a freshly
-# created entry so a fresh install can validate the gas-only Fusion path
-# during first sync.
+# Environment variable used to drive the test-only gas-only Fusion path.
+# Set it (to a truthy value) before starting Home Assistant so the very
+# first sync skips Bidgely and reads Fusion monthly totals instead. It is
+# the single source of truth for this flag and is read live on every sync.
 ENV_FORCE_FUSION_GAS_ONLY = "DOMINION_SC_FORCE_FUSION_GAS_ONLY"
 
 # Recognized truthy values for ENV_FORCE_FUSION_GAS_ONLY (case-insensitive).
@@ -33,23 +30,26 @@ _FORCE_TRUTHY = {"1", "true", "yes", "on"}
 
 
 def read_force_fusion_gas_only_from_env(
-    env: "dict[str, str] | None" = None,
+    env: "Mapping[str, str] | None" = None,
 ) -> bool:
     """Whether the force-fusion-gas-only flag is set via the environment.
 
     Reads ``DOMINION_SC_FORCE_FUSION_GAS_ONLY`` from ``env`` (defaults to
-    ``os.environ``). Recognized truthy values are, case-insensitively,
-    ``1``, ``true``, ``yes`` and ``on``; anything else, including a missing
-    variable, is ``False``.
+    ``os.environ``). Returns ``True`` for recognized truthy values (case-
+    insensitive ``1``, ``true``, ``yes``, ``on``); ``False`` otherwise
+    (missing variable, ``""``, ``0``, ``false``, ``off``, or any other
+    value).
 
-    This lets a fresh install seed the flag into the entry's ``data`` before
-    first sync, so the coordinator's Fusion-only path is exercised during
-    setup without editing HACS options. Because it reads a plain env var it
-    never leaks into a published integration and has no effect on existing
-    users. ``env`` is injectable for testing.
+    This is the single source of truth for the test-only Fusion gas-only
+    path: the coordinator evaluates it live on every sync, so setting or
+    clearing the variable and restarting the integration flips the path
+    without editing HACS options. It reads a plain env var, so it never
+    leaks into a published integration and has no effect on existing users.
+    ``env`` is injectable for testing.
     """
     env = env if env is not None else os.environ
-    return env.get(ENV_FORCE_FUSION_GAS_ONLY, "").strip().lower() in _FORCE_TRUTHY
+    raw = env.get(ENV_FORCE_FUSION_GAS_ONLY)
+    return bool(raw) and raw.strip().lower() in _FORCE_TRUTHY
 
 SERVICE_RUN_BACKFILL = "run_backfill"
 SERVICE_RUN_BACKFILL_ALL = "run_backfill_all"

@@ -19,7 +19,6 @@ from homeassistant.helpers.selector import (
 from .const import (
     CONF_BACKFILL_CYCLES_TARGET,
     CONF_DAILY_LOOKBACK_DAYS,
-    CONF_FORCE_FUSION_GAS_ONLY,
     CONF_PASSWORD,
     CONF_POLL_MINUTES,
     CONF_TFA_TOKEN,
@@ -27,7 +26,6 @@ from .const import (
     CONF_VERIFY_SSL,
     DEFAULT_BACKFILL_CYCLES_TARGET,
     DEFAULT_DAILY_LOOKBACK_DAYS,
-    DEFAULT_FORCE_FUSION_GAS_ONLY,
     DEFAULT_POLL_MINUTES,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
@@ -58,10 +56,6 @@ class DominionSCConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._selected_tfa_option = None
         self._is_reconfigure = False
         self._reconfig_entry = None
-        # Set from the environment (DOMINION_SC_FORCE_FUSION_GAS_ONLY) so a fresh
-        # install can seed the force-fusion-gas-only flag into the entry and
-        # validate that path during first sync.
-        self._force_fusion_gas_only = read_force_fusion_gas_only_from_env()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
@@ -273,18 +267,19 @@ class DominionSCConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def _async_finish(self):
         """Create or update the config entry after successful auth.
 
-        Seeds ``force_fusion_gas_only`` into the entry's ``data`` so a fresh
-        install can run the coordinator's Fusion gas-only path during first
-        sync. The flag is read from ``DOMINION_SC_FORCE_FUSION_GAS_ONLY`` and
-        is persisted on the entry; the coordinator prefers an explicit options
-        value over ``data`` when reading, so HACS options always win.
+        The force-fusion-gas-only path is driven solely by the
+        ``DOMINION_SC_FORCE_FUSION_GAS_ONLY`` env var, read live by the
+        coordinator on every sync, so nothing here persists a flag. The env
+        var is set by the operator, so we emit a reminder in the logs when it
+        is active to make the current behavior obvious.
         """
-        entry_data = {**self._user_data, CONF_FORCE_FUSION_GAS_ONLY: self._force_fusion_gas_only}
-        if self._force_fusion_gas_only:
+        if read_force_fusion_gas_only_from_env():
             _LOGGER.warning(
-                "Fusion gas-only test mode enabled for this entry; "
-                "Bidgely data will be skipped during sync."
+                "Fusion gas-only test mode enabled via "
+                "DOMINION_SC_FORCE_FUSION_GAS_ONLY; Bidgely data will be "
+                "skipped during sync."
             )
+        entry_data = dict(self._user_data)
         if self._is_reconfigure and self._reconfig_entry:
             _LOGGER.debug(
                 "Reconfigure: updating entry %s",
@@ -367,21 +362,6 @@ class DominionSCOptionsFlow(config_entries.OptionsFlow):
                         unit_of_measurement="days",
                     )
                 ),
-                vol.Optional(
-                    CONF_FORCE_FUSION_GAS_ONLY,
-                    description={
-                        "suggested_value": _get_current(
-                            CONF_FORCE_FUSION_GAS_ONLY,
-                            DEFAULT_FORCE_FUSION_GAS_ONLY,
-                        )
-                    },
-                    default=bool(
-                        _get_current(
-                            CONF_FORCE_FUSION_GAS_ONLY,
-                            DEFAULT_FORCE_FUSION_GAS_ONLY,
-                        )
-                    ),
-                ): BooleanSelector(BooleanSelectorConfig()),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

@@ -535,15 +535,21 @@ async def test_process_fusion_skips_non_gas_only(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_process_fusion_forced_mode_runs_on_non_gas_only(monkeypatch):
-    # The HACS options flow can force Fusion gas-only mode. When forced,
+    # The operator can force Fusion gas-only mode via env var. When set,
     # _process_fusion must run even though the account reports a non-GAS
     # service set (e.g. an electric account the user is testing in place of a
     # genuine gas-only account).
     coord = _make_fusion_coordinator(monkeypatch, FUSION_GAS_RECORDS, "fusion_forced")
     coord._client._service_types = {"ELECTRIC"}
-    coord.config_entry.options[const.CONF_FORCE_FUSION_GAS_ONLY] = True
 
+    # The entry-flag option is ignored: only the env var controls the path.
+    monkeypatch.delenv(const.ENV_FORCE_FUSION_GAS_ONLY, raising=False)
+    assert coord.is_force_fusion_gas_only is False
+
+    # Set via env var, evaluated live on every sync.
+    monkeypatch.setenv(const.ENV_FORCE_FUSION_GAS_ONLY, "true")
     assert coord.is_force_fusion_gas_only is True
+
     await coord._process_fusion()
     assert coord.totals[const.TOTAL_GAS_FT3] > 0.0
     assert coord.totals[const.TOTAL_GAS_COST] > 0.0
@@ -553,13 +559,13 @@ def test_read_force_fusion_gas_only_from_env(monkeypatch):
     # Truthy values, case-insensitive.
     for val in ("1", "true", "yes", "on", "TRUE", "On"):
         assert const.read_force_fusion_gas_only_from_env({const.ENV_FORCE_FUSION_GAS_ONLY: val}) is True
-    # Missing / falsy values are False.
-    assert const.read_force_fusion_gas_only_from_env({}) is False
+    # A falsy value is a present-but-False result.
     assert const.read_force_fusion_gas_only_from_env({const.ENV_FORCE_FUSION_GAS_ONLY: "0"}) is False
     assert const.read_force_fusion_gas_only_from_env({const.ENV_FORCE_FUSION_GAS_ONLY: "off"}) is False
-    assert const.read_force_fusion_gas_only_from_env({const.ENV_FORCE_FUSION_GAS_ONLY: "  1 "}) is True
-    # A missing variable never leaks truthy results.
+    # A missing variable is just False: it never leaks truthy results.
+    assert const.read_force_fusion_gas_only_from_env({}) is False
     assert const.read_force_fusion_gas_only_from_env(None) is False
+    assert const.read_force_fusion_gas_only_from_env({const.ENV_FORCE_FUSION_GAS_ONLY: "  1 "}) is True
 
 
 @pytest.mark.asyncio
@@ -572,7 +578,7 @@ async def test_process_fusion_forced_mode_still_filters_electric(monkeypatch):
     ]
     coord = _make_fusion_coordinator(monkeypatch, records, "fusion_forced_mixed")
     coord._client._service_types = {"ELECTRIC", "GAS"}
-    coord.config_entry.options[const.CONF_FORCE_FUSION_GAS_ONLY] = True
+    monkeypatch.setenv(const.ENV_FORCE_FUSION_GAS_ONLY, "true")
 
     await coord._process_fusion()
     # Only the 5.0 therms gas row folds in; the 100 kWh row is ignored.

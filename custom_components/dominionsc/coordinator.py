@@ -16,7 +16,6 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import (
     CONF_BACKFILL_CYCLES_TARGET,
     CONF_DAILY_LOOKBACK_DAYS,
-    CONF_FORCE_FUSION_GAS_ONLY,
     CONF_PASSWORD,
     CONF_POLL_MINUTES,
     CONF_TFA_TOKEN,
@@ -24,7 +23,6 @@ from .const import (
     CONF_VERIFY_SSL,
     DEFAULT_BACKFILL_CYCLES_TARGET,
     DEFAULT_DAILY_LOOKBACK_DAYS,
-    DEFAULT_FORCE_FUSION_GAS_ONLY,
     DEFAULT_POLL_MINUTES,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
@@ -34,6 +32,7 @@ from .const import (
     TOTAL_ELECTRIC_KWH,
     TOTAL_GAS_COST,
     TOTAL_GAS_FT3,
+    read_force_fusion_gas_only_from_env,
 )
 from .dominion_sc_client import DominionSCClient
 
@@ -140,19 +139,21 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
 
     @property
     def is_force_fusion_gas_only(self) -> bool:
-        """Whether the HACS options flow forced the Fusion gas-only path.
+        """Whether the coordinator should force the Fusion gas-only path.
 
-        A test-only toggle that makes the coordinator behave as if the
-        account were gas-only (Fusion monthly totals only, no Bidgely data),
-        regardless of the account's real service types. Persists in the
-        options flow until the user turns it off.
+        A test-only flag that makes the coordinator behave as if the account
+        were gas-only (Fusion monthly totals only, no Bidgely data),
+        regardless of the account's real service types.
+
+        The single source of truth is the ``DOMINION_SC_FORCE_FUSION_GAS_ONLY``
+        env var, evaluated live on every sync. Setting it in the runtime
+        environment (e.g. a container's ``.env`` / compose ``env``) and
+        restarting the integration flips the flag on the current entry
+        without editing HACS options, so it works for pre-existing entries
+        too. It reads a plain env var, so it never leaks into a published
+        integration and has no effect on existing users.
         """
-        return bool(
-            self.config_entry.options.get(
-                CONF_FORCE_FUSION_GAS_ONLY,
-                self.config_entry.data.get(CONF_FORCE_FUSION_GAS_ONLY, DEFAULT_FORCE_FUSION_GAS_ONLY),
-            )
-        )
+        return bool(read_force_fusion_gas_only_from_env())
 
     @property
     def backfill_summary(self) -> dict[str, Any]:
@@ -382,14 +383,15 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
     async def _async_update_data(self) -> dict[str, float]:
         try:
             await self._ensure_authenticated()
-            # Warn once (per coordinator instance) if the user has toggled the
-            # test-only Fusion gas-only mode, so it's clear Bidgely is being
+            # Warn once (per coordinator instance) if the operator has enabled
+            # the test-only Fusion gas-only mode, so it's clear Bidgely is being
             # skipped and totals come from Fusion alone.
             if self.is_force_fusion_gas_only and not self._fusion_gas_only_logged:
                 self._fusion_gas_only_logged = True
                 _LOGGER.warning(
-                    "Force Fusion gas-only mode enabled via HACS options; "
-                    "Bidgely data will be skipped and gas totals sourced from Fusion."
+                    "Force Fusion gas-only mode enabled via "
+                    "DOMINION_SC_FORCE_FUSION_GAS_ONLY; Bidgely data will be "
+                    "skipped and gas totals sourced from Fusion."
                 )
             # Fetch account and billing data used by informational sensors.
             # Use the executor because the client uses blocking requests.
@@ -413,7 +415,7 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             except Exception as err:  # pylint: disable=broad-except
                 _LOGGER.warning("Could not fetch bill_projection: %s", err)
             # Gas-only accounts (and accounts forced into gas-only test mode
-            # via the HACS options flow) have no Bidgely data, so the interval,
+            # via the env var) have no Bidgely data, so the interval,
             # daily-reconcile and backfill steps are skipped. This matches the
             # existing guard so forced mode truly behaves like a gas-only
             # account rather than half-taking the Bidgely path.
@@ -1146,8 +1148,8 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         # Skip entirely for accounts that fetch usage through Bidgely: those
         # report electric usage that belongs in the electric totals, not the
         # gas totals. Gas-only accounts (and accounts forced into gas-only test
-        # mode via the HACS options flow) bypass this guard so we only hit the
-        # extra Fusion endpoint when it is actually needed.
+        # mode via the env var) bypass this guard so we only hit the extra
+        # Fusion endpoint when it is actually needed.
         if self._client._service_types != {"GAS"} and not self.is_force_fusion_gas_only:
             return
 
