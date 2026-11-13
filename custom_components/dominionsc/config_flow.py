@@ -268,7 +268,7 @@ class DominionSCConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Create or update the config entry after successful auth.
 
         The force-fusion-gas-only path is driven solely by the
-        ``DOMINION_SC_FORCE_FUSION_GAS_ONLY`` env var, read live by the
+        ``DOMINIONSC_FORCE_FUSION_GAS_ONLY`` env var, read live by the
         coordinator on every sync, so nothing here persists a flag. The env
         var is set by the operator, so we emit a reminder in the logs when it
         is active to make the current behavior obvious.
@@ -276,7 +276,7 @@ class DominionSCConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if read_force_fusion_gas_only_from_env():
             _LOGGER.warning(
                 "Fusion gas-only test mode enabled via "
-                "DOMINION_SC_FORCE_FUSION_GAS_ONLY; Bidgely data will be "
+                "DOMINIONSC_FORCE_FUSION_GAS_ONLY; Bidgely data will be "
                 "skipped during sync."
             )
         entry_data = dict(self._user_data)

@@ -23,7 +23,7 @@ DEFAULT_DAILY_LOOKBACK_DAYS = 5
 # Set it (to a truthy value) before starting Home Assistant so the very
 # first sync skips Bidgely and reads Fusion monthly totals instead. It is
 # the single source of truth for this flag and is read live on every sync.
-ENV_FORCE_FUSION_GAS_ONLY = "DOMINION_SC_FORCE_FUSION_GAS_ONLY"
+ENV_FORCE_FUSION_GAS_ONLY = "DOMINIONSC_FORCE_FUSION_GAS_ONLY"
 
 # Recognized truthy values for ENV_FORCE_FUSION_GAS_ONLY (case-insensitive).
 _FORCE_TRUTHY = {"1", "true", "yes", "on"}
@@ -34,7 +34,7 @@ def read_force_fusion_gas_only_from_env(
 ) -> bool:
     """Whether the force-fusion-gas-only flag is set via the environment.
 
-    Reads ``DOMINION_SC_FORCE_FUSION_GAS_ONLY`` from ``env`` (defaults to
+    Reads ``DOMINIONSC_FORCE_FUSION_GAS_ONLY`` from ``env`` (defaults to
     ``os.environ``). Returns ``True`` for recognized truthy values (case-
     insensitive ``1``, ``true``, ``yes``, ``on``); ``False`` otherwise
     (missing variable, ``""``, ``0``, ``false``, ``off``, or any other

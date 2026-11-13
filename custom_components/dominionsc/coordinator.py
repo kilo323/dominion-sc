@@ -145,7 +145,7 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         were gas-only (Fusion monthly totals only, no Bidgely data),
         regardless of the account's real service types.
 
-        The single source of truth is the ``DOMINION_SC_FORCE_FUSION_GAS_ONLY``
+        The single source of truth is the ``DOMINIONSC_FORCE_FUSION_GAS_ONLY``
         env var, evaluated live on every sync. Setting it in the runtime
         environment (e.g. a container's ``.env`` / compose ``env``) and
         restarting the integration flips the flag on the current entry
@@ -403,7 +403,7 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
                 self._fusion_gas_only_logged = True
                 _LOGGER.warning(
                     "Force Fusion gas-only mode enabled via "
-                    "DOMINION_SC_FORCE_FUSION_GAS_ONLY; Bidgely data will be "
+                    "DOMINIONSC_FORCE_FUSION_GAS_ONLY; Bidgely data will be "
                     "skipped and gas totals sourced from Fusion."
                 )
             # Fetch account and billing data used by informational sensors.
