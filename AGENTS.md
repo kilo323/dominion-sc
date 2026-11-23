@@ -7,7 +7,7 @@ Dashboard and long-term statistics.
 
 ## Stack
 
-- Python **3.11–3.13** (CI matrix); develop/tested on latest 3.x
+- Python **3.11–3.12** (CI matrix in `.github/workflows/ci.yml`); develop/tested on 3.13
 - Home Assistant **2026.4.0** (see `manifest.json` `homeassistant`)
 - Runtime dependency: `beautifulsoup4>=4.12.3` (the API client scrapes HTML)
 - Packaging: HACS custom integration (`hacs.json`) — **no** npm/package.json, it's pure Python
